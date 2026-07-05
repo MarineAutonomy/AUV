@@ -26,10 +26,11 @@ ament_python_install_package(brping)
 install(PROGRAMS
   scripts/sidescan_node
   scripts/sidescan_all_node
+  scripts/waterfall_server
   DESTINATION lib/${PROJECT_NAME}
 )
 
-install(DIRECTORY launch config
+install(DIRECTORY launch config web
   DESTINATION share/${PROJECT_NAME}
 )
 

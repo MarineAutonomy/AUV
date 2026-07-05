@@ -116,6 +116,10 @@ class SidescanNode(Node):
             SideScanSonar, '/'.join([self.sensor_name, SONAR_TOPIC_NAME]), 10)
 
         logger = self.get_logger()
+        self.get_logger().info(
+            f'Connecting to port sonar at {port_ip_address}:{port_port} and '
+            f'starboard sonar at {starboard_ip_address}:{starboard_port}')
+
         self.omniscan450_port = Omniscan450Driver(
             ip_address=port_ip_address, port=port_port, logger=logger, **sonar_params)
         self.omniscan450_starboard = Omniscan450Driver(

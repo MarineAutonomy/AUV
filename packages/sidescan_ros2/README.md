@@ -18,8 +18,25 @@ source install/setup.bash
 # 2-transducer (port + starboard)
 ros2 launch sidescan_ros2 sidescan.launch.py
 
+# 2-transducer + rosbridge + waterfall web UI (port 9001)
+ros2 launch sidescan_ros2 sidescan_waterfall.launch.py
+
 # 4-transducer (port + starboard + bow + stern)
 ros2 launch sidescan_ros2 sidescan_all.launch.py
+```
+
+### Waterfall web viewer
+
+`sidescan_waterfall.launch.py` starts the driver, [rosbridge](http://wiki.ros.org/rosbridge_server) (WebSocket on port 9090), and a static web server on port **9001**. Open:
+
+```
+http://localhost:9001/
+```
+
+Requires `ros-humble-rosbridge-server`:
+
+```bash
+sudo apt install ros-humble-rosbridge-server
 ```
 
 Override sonar IPs at launch:
