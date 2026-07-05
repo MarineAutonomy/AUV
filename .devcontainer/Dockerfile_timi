@@ -108,8 +108,6 @@ RUN arduino-cli --config-file /home/${USERNAME}/.arduino15/arduino-cli.yaml lib 
 # -------------------- ROS Workspace --------------------
 COPY --chown=${USERNAME}:${USERNAME} packages /home/${USERNAME}/ros2_ws/src
 
-RUN rm -rf /home/${USERNAME}/ros2_ws/src/zed-ros2-wrapper
-
 USER root
 WORKDIR /home/${USERNAME}/ros2_ws
 

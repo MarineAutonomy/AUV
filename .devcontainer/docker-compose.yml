@@ -1,6 +1,6 @@
 services:
   sookshma:
-    image: aatmaj9/timi:1.0
+    image: aatmaj9/timi:2.0
     restart: unless-stopped
     build:
       context: .
