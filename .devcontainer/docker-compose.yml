@@ -50,7 +50,7 @@ services:
 
   # Run rosbridge persistently (avoid GUI pkill/start churn).
   rosbridge:
-    image: aatmaj9/timi:1.0
+    image: aatmaj9/timi:2.0
     restart: unless-stopped
     container_name: auv_rosbridge
     working_dir: /workspaces/mavlab
