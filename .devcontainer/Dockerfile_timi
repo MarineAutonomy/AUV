@@ -158,6 +158,7 @@ RUN echo "alias sbg='sros2 && ros2 launch sbg_driver sbg_device_launch.py'" >> /
  && echo "alias modem='sros2 && scode && ros2 run modem_m64 modem_node --ros-args -r __ns:=/auv -p role:=b -p port:=/dev/modem'" >> /home/${USERNAME}/.bashrc \
  && echo "alias bar30='scode && ros2 run arduino_ps arduino_ps'" >> /home/${USERNAME}/.bashrc \
  && echo "alias dvl_calibrate='sros2 && ros2 topic pub --once /dvl/config/command dvl_msgs/msg/ConfigCommand \"{command: calibrate_gyro}\"'" >> /home/${USERNAME}/.bashrc \
- && echo "alias dvl_reset='sros2 && ros2 topic pub --once /dvl/config/command dvl_msgs/msg/ConfigCommand \"{command: reset_dead_reckoning}\"'" >> /home/${USERNAME}/.bashrc
+ && echo "alias dvl_reset='sros2 && ros2 topic pub --once /dvl/config/command dvl_msgs/msg/ConfigCommand \"{command: reset_dead_reckoning}\"'" >> /home/${USERNAME}/.bashrc \
+ && echo "alias sidescan='sros2 && scode && ros2 launch sidescan_ros2 sidescan.launch.py'" >> /home/${USERNAME}/.bashrc
 # -------------------- Expose Ports --------------------
 EXPOSE 9000 9001 9002 9003

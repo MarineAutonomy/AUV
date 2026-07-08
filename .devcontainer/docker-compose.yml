@@ -67,4 +67,4 @@ services:
       - CYCLONEDDS_URI=file:///workspaces/mavlab/.devcontainer/cyclonedds.xml
     volumes:
       - ..:/workspaces/mavlab
-    command: bash -ic "sros2 && scode && ros2 launch rosbridge_server rosbridge_websocket_launch.xml"
+    command: bash -ic "sros2 && scode && ros2 run rosbridge_server rosbridge_websocket --ros-args -p max_message_size:=10000000"

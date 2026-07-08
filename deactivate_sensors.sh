@@ -1,6 +1,6 @@
 echo "🔄 Deactivating sensors..."
 
-nohup docker exec auv pkill -u mavlab -9 -f "sbg|ping|dvl|frontcam|bottomcam|modem|bar30|ros2" >/dev/null 2>&1 &
+nohup docker exec auv pkill -u mavlab -9 -f "sbg|ping|dvl|frontcam|bottomcam|modem|bar30|sidescan|ros2" >/dev/null 2>&1 &
 disown
 
 sleep 1
