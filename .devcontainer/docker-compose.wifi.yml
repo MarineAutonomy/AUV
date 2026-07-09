@@ -1,0 +1,9 @@
+services:
+  sookshma:
+    environment:
+      - CYCLONEDDS_URI=file:///workspaces/mavlab/.devcontainer/cyclonedds_wifi.nxml
+
+  rosbridge:
+    environment:
+      - CYCLONEDDS_URI=file:///workspaces/mavlab/.devcontainer/cyclonedds_wifi.nxml
+

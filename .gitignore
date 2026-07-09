@@ -1,6 +1,9 @@
 code_ws/build/
 code_ws/install/
 code_ws/log/
+pc_ws/build/
+pc_ws/install/ 
+pc_ws/log/
 *.bag
 *.bin
 *.pcap

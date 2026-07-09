@@ -2,9 +2,10 @@
 <CycloneDDS xmlns="https://cdds.io/config">
   <Domain Id="any">
     <General>
-      <!-- Pin DDS to the Wi‑Fi extender interface to avoid multi-NIC discovery flakiness. -->
+      <!-- Tether / ROV mode: pin DDS to the ethernet interface connected to the internal switch. -->
+      <!-- If your ethernet NIC name differs, update it with `ip -br link`. -->
       <Interfaces>
-        <NetworkInterface name="wlx8c902d14c273" />
+        <NetworkInterface name="enP8p1s0" />
       </Interfaces>
       <AllowMulticast>default</AllowMulticast>
       <MaxMessageSize>65500B</MaxMessageSize>
