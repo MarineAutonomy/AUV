@@ -1,0 +1,18 @@
+
+services:
+  sonarview:
+    image: nicknothom/sonarview:1.14.70
+    container_name: sonarview
+    network_mode: host
+    restart: unless-stopped
+    group_add:
+      - dialout
+    devices:
+      - /dev/ping360:/dev/ping360
+      - /dev/ping2:/dev/ping2
+    volumes:
+      - ${SONARVIEW_USERDATA:-/home/timi/SonarView}:/userdata
+    environment:
+      - ENABLE_OS3D=false
+      
+#docker compose -p sonarview -f docker-compose.sonarview.yml up -d

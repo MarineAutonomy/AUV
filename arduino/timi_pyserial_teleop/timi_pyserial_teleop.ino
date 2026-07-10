@@ -1,3 +1,7 @@
+// timi_pyserial_teleop — RF + GUI teleop variant.
+// Same hardware as timi_pyserial, but serial/GUI works with no IBUS receiver connected.
+// RF manual mode unchanged when receiver is present and CH5 = MANUAL (1000).
+
 #include "FlySkyIBus.h"
 #include <Servo.h>
 #include <Wire.h>
@@ -43,6 +47,13 @@ const unsigned long SENSOR_INTERVAL = 1000; // ms between readings
 // ──────────────────────────────────────────────────────────────
 
 // ── Helpers ────────────────────────────────────────────────────
+// Valid FlySky IBUS frames are ~1000–2000 µs; unplugged/no signal reads ~0.
+bool ibusLinkOk() {
+  uint16_t ch0 = IBus.readChannel(0);
+  uint16_t ch5 = IBus.readChannel(4);
+  return (ch0 >= 988 && ch0 <= 2012) || (ch5 >= 988 && ch5 <= 2012);
+}
+
 int readChannel(byte channelInput, int minLimit, int maxLimit, int defaultValue) {
   uint16_t ch = IBus.readChannel(channelInput);
   if (ch < 5) return defaultValue;
@@ -106,25 +117,25 @@ void processMessage(char* message) {
   thrustersbms2.writeMicroseconds(values[7]);
   lightfl.writeMicroseconds(1900);
   lightbl.writeMicroseconds(1900);
+  auto_start_time = millis();  // keep RF AUTO session alive while serial commands flow
 }
 
 void Auto() {
-  // Use a static buffer to maintain data across loop() calls
   static char buffer[BUFFER_SIZE];
   static int bufferIndex = 0;
 
   while (Serial.available() > 0) {
     char incomingChar = Serial.read();
-    
+
     if (incomingChar == '\n') {
-      buffer[bufferIndex] = '\0'; // Null-terminate
-      processMessage(buffer);     // Parse the data
-      bufferIndex = 0;            // Reset index
-    } else if (incomingChar >= ' ') { // Only store printable characters
+      buffer[bufferIndex] = '\0';
+      processMessage(buffer);
+      bufferIndex = 0;
+    } else if (incomingChar >= ' ') {
       if (bufferIndex < BUFFER_SIZE - 1) {
         buffer[bufferIndex++] = incomingChar;
       } else {
-        bufferIndex = 0; // Overflow safety
+        bufferIndex = 0;
       }
     }
   }
@@ -140,8 +151,6 @@ void updateSensor() {
 
   sensor.read();
 
-  // Send as a compact CSV line so your topside computer can parse it:
-  // "S,<pressure_mbar>,<temp_C>,<depth_m>"
   Serial.print("S,");
   Serial.print(sensor.pressure());
   Serial.print(",");
@@ -156,16 +165,14 @@ void setup() {
   Serial.setTimeout(10);
   IBus.begin(Serial1);
 
-  // ── Init MS5837 ───────────────────────────────────────────
   Wire.begin();
   if (sensor.init()) {
-    sensor.setFluidDensity(1029); // seawater; use 997 for freshwater
+    sensor.setFluidDensity(1029);
     sensorOK = true;
     Serial.println("MS5837 OK");
   } else {
     Serial.println("MS5837 init failed - continuing without sensor");
   }
-  // ─────────────────────────────────────────────────────────
 
   lightfl.attach(light1Pin);
   lightbl.attach(light2Pin);
@@ -192,13 +199,14 @@ void loop() {
   CH8 = IBus.readChannel(7);
 
   digitalWrite(indicator, HIGH);
-
-  // ── Read & transmit sensor data (non-blocking) ────────────
   updateSensor();
-  // ─────────────────────────────────────────────────────────
 
-  // ── Kill switch ──────────────────────────────────────────
-  if (CH6 == 2000) {
+  bool rfPresent = ibusLinkOk();
+  // No receiver → serial/GUI teleop. With receiver → CH5 switch picks manual vs auto.
+  bool serialAuto = !rfPresent || CH5 == 2000;
+
+  // ── Kill switch (RF only — requires a live receiver) ───────
+  if (rfPresent && CH6 == 2000) {
     if (first_count) {
       start_millis = millis();
       seconds_counter = 0;
@@ -208,17 +216,19 @@ void loop() {
     if (current_millis - start_millis >= 1000) {
       stopAllThrusters();
     }
+    auto_active = false;
   }
-  // ── Autonomy ─────────────────────────────────────────────
-  else if (CH5 == 2000) {
+  // ── Serial / GUI teleop (AUTO, or no receiver) ───────────
+  else if (serialAuto) {
     if (!auto_active) {
-    // ✅ First entry into Auto mode — stop all thrusters ONCE
-    auto_active = true;
-    auto_start_time = millis();
-    stopAllThrusters();   // <-- moved here
-    delay(500);           // brief pause so ESCs register neutral
+      auto_active = true;
+      auto_start_time = millis();
+      stopAllThrusters();
+      delay(500);
     }
-    if (millis() - auto_start_time <= AUTO_TIMEOUT) {
+    // 120 s cap only when RF receiver is on and CH5 is in AUTO
+    bool withinAutoWindow = !rfPresent || (millis() - auto_start_time <= AUTO_TIMEOUT);
+    if (withinAutoWindow) {
       Auto();
       lightfl.writeMicroseconds(1900);
       lightbl.writeMicroseconds(1900);
@@ -226,10 +236,10 @@ void loop() {
       stopAllThrusters();
     }
   }
-  // ── Manual RF ─────────────────────────────────────────────
-  else if (CH5 == 1000) {
+  // ── Manual RF (receiver connected, CH5 = MANUAL) ───────────
+  else if (rfPresent && CH5 == 1000) {
     first_count = true;
-    auto_active  = false;   // reset autonomy flag when back in manual
+    auto_active = false;
 
     CH1 = readChannel(0, 1300, 1700, 1500);
     CH2 = readChannel(1, 1300, 1700, 1500);
@@ -237,5 +247,10 @@ void loop() {
     CH4 = readChannel(3, 1300, 1700, 1500);
 
     RF_MAN(CH1, CH2, CH3, CH4);
+  }
+  // ── Receiver on but mode switch in an unknown position ─────
+  else if (rfPresent) {
+    auto_active = false;
+    stopAllThrusters();
   }
 }
