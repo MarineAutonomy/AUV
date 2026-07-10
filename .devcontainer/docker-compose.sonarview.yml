@@ -5,14 +5,15 @@ services:
     container_name: sonarview
     network_mode: host
     restart: unless-stopped
+    privileged: true
     group_add:
       - dialout
-    devices:
-      - /dev/ping360:/dev/ping360
-      - /dev/ping2:/dev/ping2
     volumes:
       - ${SONARVIEW_USERDATA:-/home/timi/SonarView}:/userdata
+      - /dev:/dev
+      - /dev/bus/usb:/dev/bus/usb
     environment:
       - ENABLE_OS3D=false
-      
-#docker compose -p sonarview -f docker-compose.sonarview.yml up -d
+
+# Started with the AUV stack:
+# docker compose -p auv -f docker-compose.yml -f docker-compose.<lan|wifi>.yml -f docker-compose.sonarview.yml up -d
