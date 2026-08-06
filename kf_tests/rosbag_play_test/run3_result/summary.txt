@@ -1,7 +1,0 @@
-Run: run3
-Samples: 2623
-Duration: 262.168 s
-Path length (NE): 62.692 m
-N range: [-13.686, 0.000] m
-E range: [-16.901, 0.813] m
-Plot: /home/aatmaj/AUV/kf_tests/rosbag_play_test/run3_result/nav_xy.png

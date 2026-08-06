@@ -22,12 +22,3 @@ From repo root:
 cd /home/aatmaj/AUV
 python3 kf_tests/ekf_offline_test/test_ekf.py run3
 ```
-
-## Output location
-
-For run `run3`, outputs are always written to:
-
-- `kf_tests/ekf_offline_test/run3_result/results.png`
-- `kf_tests/ekf_offline_test/run3_result/heading.png`
-- `kf_tests/ekf_offline_test/run3_result/summary.txt`
-

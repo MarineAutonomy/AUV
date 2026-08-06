@@ -7,3 +7,7 @@ services:
     environment:
       - CYCLONEDDS_URI=file:///workspaces/mavlab/.devcontainer/cyclonedds_lan.xml
 
+  web_video_server:
+    environment:
+      - CYCLONEDDS_URI=file:///workspaces/mavlab/.devcontainer/cyclonedds_lan.xml
+

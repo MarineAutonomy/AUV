@@ -1,8 +1,0 @@
-Run: run5
-Generated samples: 8109
-Generated duration: 810.791 s
-Generated path length (NE): 5.714 m
-Generated N range: [-3.606, 0.000] m
-Generated E range: [-3.889, 0.001] m
-Input topic not found in input bag: /navigation/odometry
-Plot: /home/aatmaj/AUV/kf_tests/rosbag_play_test/run5_result/nav_xy.png

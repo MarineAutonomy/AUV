@@ -37,6 +37,7 @@ RUN apt-get update && apt-get install -y software-properties-common \
       ros-humble-nmea-msgs \
       ros-humble-rtcm-msgs \
       ros-humble-rosbridge-server \
+      ros-humble-web-video-server \
       ros-humble-rosx-introspection \
       ros-humble-foxglove-bridge \
       ros-humble-image-transport \

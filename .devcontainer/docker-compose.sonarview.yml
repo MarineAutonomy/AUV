@@ -14,6 +14,4 @@ services:
       - /dev/bus/usb:/dev/bus/usb
     environment:
       - ENABLE_OS3D=false
-
-# Started with the AUV stack:
-# docker compose -p auv -f docker-compose.yml -f docker-compose.<lan|wifi>.yml -f docker-compose.sonarview.yml up -d
+  

@@ -12,3 +12,4 @@ pc_ws/log/
 *.AppImage
 MAV-GUI/
 kf_tests/run*/
+SS450-Data/

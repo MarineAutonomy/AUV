@@ -69,3 +69,25 @@ services:
       - ..:/workspaces/mavlab
   # Use the upstream launch file so rosapi_node starts too (GUI echo/plots need /rosapi/topic_type).
     command: bash -ic "sros2 && scode && ros2 launch rosbridge_server rosbridge_websocket_launch.xml max_message_size:=10000000"
+
+  # MJPEG HTTP streams for MAV GUI Imaging (keeps ROS image topics unchanged).
+  # Example: http://<vehicle-ip>:8080/stream?topic=/front/image_raw
+  web_video_server:
+    image: aatmaj9/timi:2.0
+    restart: unless-stopped
+    container_name: auv_web_video_server
+    working_dir: /workspaces/mavlab
+    user: "mavlab"
+    privileged: true
+    network_mode: host
+    ipc: host
+    pid: host
+    stdin_open: true
+    tty: true
+    environment:
+      - ROS_DOMAIN_ID=0
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - CYCLONEDDS_URI=file:///workspaces/mavlab/.devcontainer/cyclonedds.xml
+    volumes:
+      - ..:/workspaces/mavlab
+    command: bash -ic "sros2 && scode && ros2 run web_video_server web_video_server --ros-args -p port:=8080"
