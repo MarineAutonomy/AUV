@@ -70,7 +70,7 @@ services:
   # Use the upstream launch file so rosapi_node starts too (GUI echo/plots need /rosapi/topic_type).
     command: bash -ic "sros2 && scode && ros2 launch rosbridge_server rosbridge_websocket_launch.xml max_message_size:=10000000"
 
-  # MJPEG HTTP streams for MAV GUI Imaging (keeps ROS image topics unchanged).
+  # MJPEG HTTP streams for MAV GUI (ROS topics unchanged).
   # Example: http://<vehicle-ip>:8080/stream?topic=/front/image_raw
   web_video_server:
     image: aatmaj9/timi:2.0

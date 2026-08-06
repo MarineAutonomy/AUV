@@ -10,6 +10,13 @@
       <AllowMulticast>default</AllowMulticast>
       <MaxMessageSize>65500B</MaxMessageSize>
     </General>
+    <Discovery>
+      <!-- Help same-host containers (auv + web_video_server) find each other. -->
+      <ParticipantIndex>auto</ParticipantIndex>
+      <Peers>
+        <Peer address="127.0.0.1"/>
+      </Peers>
+    </Discovery>
     <Internal>
       <SocketReceiveBufferSize min="10MB"/>
       <Watermarks>

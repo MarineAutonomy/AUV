@@ -10,4 +10,3 @@ services:
   web_video_server:
     environment:
       - CYCLONEDDS_URI=file:///workspaces/mavlab/.devcontainer/cyclonedds_wifi.nxml
-
