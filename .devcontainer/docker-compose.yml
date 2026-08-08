@@ -91,3 +91,24 @@ services:
     volumes:
       - ..:/workspaces/mavlab
     command: bash -ic "sros2 && scode && ros2 run web_video_server web_video_server --ros-args -p port:=8080"
+
+  # Foxglove Studio sidecar (ws://<vehicle-ip>:8765). Does not replace rosbridge for MAV GUI.
+  foxglove_bridge:
+    image: aatmaj9/timi:2.0
+    restart: unless-stopped
+    container_name: auv_foxglove_bridge
+    working_dir: /workspaces/mavlab
+    user: "mavlab"
+    privileged: true
+    network_mode: host
+    ipc: host
+    pid: host
+    stdin_open: true
+    tty: true
+    environment:
+      - ROS_DOMAIN_ID=0
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - CYCLONEDDS_URI=file:///workspaces/mavlab/.devcontainer/cyclonedds.xml
+    volumes:
+      - ..:/workspaces/mavlab
+    command: bash -ic "sros2 && scode && ros2 launch foxglove_bridge foxglove_bridge_launch.xml port:=8765"
