@@ -4,8 +4,11 @@ SUBSYSTEMS=="usb", ATTRS{product}=="USB-RS232 Cable", ATTRS{serial}=="AU06AR38",
 # Ardusimple - GNSS
 SUBSYSTEMS=="usb", ATTRS{product}=="u-blox GNSS receiver", SYMLINK+="ardusimple", GROUP="dialout", MODE="0660"
 
-# Arduino Mega
-SUBSYSTEMS=="usb", ATTRS{manufacturer}=="Arduino (www.arduino.cc)", SYMLINK+="arduino", GROUP="dialout", MODE="0660"
+# Arduino Mega 2560 R3
+SUBSYSTEMS=="usb", ATTRS{idVendor}=="2341", ATTRS{idProduct}=="0042", ATTRS{serial}=="0353637333235141A012", SYMLINK+="arduino_mega", GROUP="dialout", MODE="0660"
+
+# Arduino UNO WiFi R4
+SUBSYSTEMS=="usb", ATTRS{idVendor}=="2341", ATTRS{idProduct}=="1002", ATTRS{serial}=="B43A453382C0", SYMLINK+="arduino_uno", GROUP="dialout", MODE="0660"
 
 # Ping2 - Echosounder
 SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6015", ATTRS{serial}=="DP05HK4F", SYMLINK+="ping2", GROUP="dialout", MODE="0660"

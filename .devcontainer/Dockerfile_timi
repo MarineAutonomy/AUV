@@ -89,6 +89,7 @@ RUN arduino-cli config init \
  && arduino-cli config set directories.data "${ARDUINO_DATA}" \
  && arduino-cli core update-index \
  && arduino-cli core install arduino:mbed_portenta \
+ && arduino-cli core install arduino:renesas_uno \
  && arduino-cli lib install Servo \
  && arduino-cli cache clean
 
