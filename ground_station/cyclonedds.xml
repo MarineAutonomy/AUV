@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  Ground station CycloneDDS — see ground_station/README.md
+
+  Peers:
+    - 127.0.0.1         same PC (joy_node ↔ teleop ↔ echo) via unicast
+    - 192.168.194.10    Jetson LAN (fixed)
+    - 192.168.0.50      Jetson Wi‑Fi (router DHCP reservation)
+
+  Interface: Wi‑Fi only (do NOT list lo — Cyclone prefers it and disables multicast).
+  Same-PC discovery uses Peer 127.0.0.1 instead.
+-->
+<CycloneDDS xmlns="https://cdds.io/config">
+  <Domain Id="any">
+    <General>
+      <Interfaces>
+        <NetworkInterface name="wlp101s0" />
+      </Interfaces>
+      <AllowMulticast>default</AllowMulticast>
+      <MaxMessageSize>65500B</MaxMessageSize>
+    </General>
+    <Discovery>
+      <ParticipantIndex>auto</ParticipantIndex>
+      <Peers>
+        <Peer address="127.0.0.1"/>
+        <Peer address="192.168.194.10"/>
+        <Peer address="192.168.0.50"/>
+      </Peers>
+    </Discovery>
+    <Internal>
+      <!-- No SocketReceiveBufferSize min=: default Ubuntu rmem_max is ~200–400KB and
+           Cyclone fails node create if min=10MB cannot be met. setup_env.sh still raises
+           net.core.rmem_max via /etc/sysctl.d/60-auv-ros2-buffers.conf when run with sudo. -->
+      <Watermarks>
+        <WhcHigh>500kB</WhcHigh>
+      </Watermarks>
+    </Internal>
+  </Domain>
+</CycloneDDS>

@@ -4,6 +4,9 @@ code_ws/log/
 pc_ws/build/
 pc_ws/install/ 
 pc_ws/log/
+ground_station/ros2_ws/build/
+ground_station/ros2_ws/install/ 
+ground_station/ros2_ws/log/
 *.bag
 *.bin
 *.pcap
@@ -13,3 +16,5 @@ pc_ws/log/
 MAV-GUI/
 kf_tests/run*/
 SS450-Data/
+__pycache__/
+*.pyc
