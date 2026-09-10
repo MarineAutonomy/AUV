@@ -1,15 +1,21 @@
 # Ground-station ROS 2 Humble image: joy_node + auv_joy_teleop.
-# Build:  docker build -t auv-ground-station:latest -f Dockerfile .
+# Build+push (repo root):  ./build_gs_docker.sh 1.0
+# Local build:  docker build --build-arg GS_IMAGE_VERSION=1.0 -t aatmaj9/auv-ground-station:1.0 -f Dockerfile .
 # Run:    ./scripts/run_joy_docker.sh
 #
 # Host needs: Docker, joystick device, cyclonedds.xml (mounted), network host for Jetson DDS.
 
 FROM ros:humble-ros-base
 
+ARG GS_IMAGE_VERSION=0.0.0
+LABEL org.opencontainers.image.version="${GS_IMAGE_VERSION}" \
+      org.opencontainers.image.title="auv-ground-station"
+
 ENV DEBIAN_FRONTEND=noninteractive \
     ROS_DOMAIN_ID=0 \
     RMW_IMPLEMENTATION=rmw_cyclonedds_cpp \
-    CYCLONEDDS_URI=file:///gs/cyclonedds.xml
+    CYCLONEDDS_URI=file:///gs/cyclonedds.xml \
+    GS_IMAGE_VERSION="${GS_IMAGE_VERSION}"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ros-humble-rmw-cyclonedds-cpp \

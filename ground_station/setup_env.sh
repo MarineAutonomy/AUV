@@ -15,8 +15,12 @@ GS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 QUIET="${GS_SETUP_QUIET:-0}"
 CYCLONE_XML="${GS_DIR}/cyclonedds.xml"
 MARKER="# >>> AUV ground station ROS env >>>"
-DOCKER_IMAGE="${AUV_GS_IMAGE:-auv-ground-station:latest}"
+GS_IMAGE_REPO="${AUV_GS_IMAGE_REPO:-aatmaj9/auv-ground-station}"
+# Full image ref (repo:tag). Prefer AUV_GS_IMAGE; else repo + AUV_GS_IMAGE_VERSION / marker.
+DOCKER_IMAGE="${AUV_GS_IMAGE:-}"
 USE_DOCKER_MARKER="${GS_DIR}/.use_docker"
+MAV_GUI_DATA_DIR="${MAV_GUI_DATA_DIR:-${HOME}/.local/share/mav-gui}"
+GS_VERSION_FILE="${MAV_GUI_DATA_DIR}/gs_image_version"
 
 # Jetson peers (edit here or in cyclonedds.xml)
 JETSON_LAN_IP="${JETSON_LAN_IP:-192.168.194.10}"
@@ -273,15 +277,79 @@ install_docker() {
 build_docker_image() {
   [ -f "$GS_DIR/Dockerfile" ] || die "missing $GS_DIR/Dockerfile"
   chmod +x "$GS_DIR/docker/entrypoint.sh" "$GS_DIR/scripts/run_joy_docker.sh" 2>/dev/null || true
+  local ver="${AUV_GS_IMAGE_VERSION:-0.0.0}"
   log "docker: building $DOCKER_IMAGE (several minutes on first run)…"
-  if ! docker_cmd build -t "$DOCKER_IMAGE" -f "$GS_DIR/Dockerfile" "$GS_DIR"; then
+  if ! docker_cmd build \
+      --build-arg "GS_IMAGE_VERSION=${ver}" \
+      -t "$DOCKER_IMAGE" \
+      -f "$GS_DIR/Dockerfile" \
+      "$GS_DIR"; then
     die "docker build failed"
   fi
   touch "$USE_DOCKER_MARKER"
+  write_gs_image_version "$ver"
   log "docker: image ready ($DOCKER_IMAGE)"
 }
 
-# Prefer pull when image exists on a registry; otherwise build locally.
+write_gs_image_version() {
+  local ver="$1"
+  [ -n "$ver" ] || return 0
+  mkdir -p "$MAV_GUI_DATA_DIR"
+  printf '%s\n' "$ver" > "$GS_VERSION_FILE"
+}
+
+# Resolve DOCKER_IMAGE to repo:version (versioned tags, not floating "latest").
+resolve_docker_image() {
+  if [ -n "${DOCKER_IMAGE}" ]; then
+    if [[ "$DOCKER_IMAGE" == *:* ]]; then
+      local tag="${DOCKER_IMAGE##*:}"
+      if [[ "$tag" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
+        export AUV_GS_IMAGE_VERSION="${AUV_GS_IMAGE_VERSION:-$tag}"
+      fi
+    fi
+    return 0
+  fi
+
+  local ver="${AUV_GS_IMAGE_VERSION:-}"
+  if [ -z "$ver" ] && [ -f "$GS_VERSION_FILE" ]; then
+    ver="$(tr -d '[:space:]' < "$GS_VERSION_FILE")"
+  fi
+  if [ -z "$ver" ]; then
+    # First install: ask Docker Hub for highest numeric tag.
+    export AUV_GS_IMAGE_REPO="$GS_IMAGE_REPO"
+    ver="$(
+      python3 - <<'PY' 2>/dev/null || true
+import json, os, urllib.request
+repo = os.environ.get("AUV_GS_IMAGE_REPO", "aatmaj9/auv-ground-station")
+url = f"https://hub.docker.com/v2/repositories/{repo}/tags?page_size=100"
+try:
+    with urllib.request.urlopen(url, timeout=15) as r:
+        data = json.load(r)
+except Exception:
+    raise SystemExit(0)
+tags = []
+for t in data.get("results") or []:
+    name = t.get("name") or ""
+    if name and all(p.isdigit() for p in name.split(".")):
+        tags.append(tuple(int(p) for p in name.split(".")))
+if not tags:
+    raise SystemExit(0)
+best = max(tags)
+print(".".join(str(x) for x in best))
+PY
+    )"
+    # shellcheck: ver may be empty
+    ver="$(echo "$ver" | tr -d '[:space:]')"
+  fi
+  if [ -z "$ver" ]; then
+    ver="1.0"
+    log "docker: could not discover Hub version — defaulting to ${ver}"
+  fi
+  export AUV_GS_IMAGE_VERSION="$ver"
+  DOCKER_IMAGE="${GS_IMAGE_REPO}:${ver}"
+}
+
+# Prefer Docker Hub pull of the resolved version; fall back to local build.
 ensure_docker_image() {
   install_docker
   chmod +x "$GS_DIR/docker/entrypoint.sh" \
@@ -289,9 +357,21 @@ ensure_docker_image() {
     "$GS_DIR/scripts/ensure_gs_container.sh" \
     "$GS_DIR/scripts/stop_joy_docker.sh" 2>/dev/null || true
 
-  log "docker: trying pull $DOCKER_IMAGE …"
+  resolve_docker_image
+  export AUV_GS_IMAGE="$DOCKER_IMAGE"
+  log "docker: target image $DOCKER_IMAGE"
+
+  if docker_cmd image inspect "$DOCKER_IMAGE" >/dev/null 2>&1; then
+    touch "$USE_DOCKER_MARKER"
+    write_gs_image_version "${AUV_GS_IMAGE_VERSION:-}"
+    log "docker: image already present ($DOCKER_IMAGE)"
+    return 0
+  fi
+
+  log "docker: image missing — pulling $DOCKER_IMAGE …"
   if docker_cmd pull "$DOCKER_IMAGE"; then
     touch "$USE_DOCKER_MARKER"
+    write_gs_image_version "${AUV_GS_IMAGE_VERSION:-}"
     log "docker: pulled $DOCKER_IMAGE"
     return 0
   fi
@@ -337,10 +417,17 @@ run_self_test() {
     else
       fail "scripts/ensure_gs_container.sh missing/not executable"
     fi
-    if docker_cmd ps --format '{{.Names}}' | grep -qx "${AUV_GS_NAME:-auv_gs}"; then
-      pass "idle container ${AUV_GS_NAME:-auv_gs} running"
+    _name="${AUV_GS_NAME:-auv_gs}"
+    if docker_cmd ps --format '{{.Names}}' | grep -qx "$_name"; then
+      _want="$(docker_cmd image inspect -f '{{.Id}}' "$DOCKER_IMAGE" 2>/dev/null || true)"
+      _have="$(docker_cmd inspect -f '{{.Image}}' "$_name" 2>/dev/null || true)"
+      if [ -n "$_want" ] && [ "$_want" = "$_have" ]; then
+        pass "idle container $_name running from $DOCKER_IMAGE"
+      else
+        fail "idle container $_name running but not from $DOCKER_IMAGE (re-run setup / ensure_gs_container)"
+      fi
     else
-      fail "idle container ${AUV_GS_NAME:-auv_gs} not running"
+      fail "idle container $_name not running"
     fi
   else
     if command -v ros2 >/dev/null 2>&1; then

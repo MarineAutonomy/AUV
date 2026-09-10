@@ -1,0 +1,479 @@
+#!/usr/bin/env python3
+"""MAV vehicle agent — runs on the vehicle (host network) for fast GUI ops.
+
+ROS is sourced once at process start. MAV-GUI calls http://<jetson>:9123 instead of
+SSH+docker-exec for sensors and device reads (USB / udev map).
+"""
+from __future__ import annotations
+
+import base64
+import json
+import os
+import re
+import signal
+import subprocess
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Dict, List, Optional, Tuple
+from urllib.parse import urlparse
+
+PORT = int(os.environ.get("MAV_AGENT_PORT", "9123"))
+AUV_DIR = os.environ.get("MAV_AUV_DIR", "/workspaces/mavlab")
+
+SENSOR_IDS = [
+    "dvl",
+    "sbg",
+    "ping2",
+    "ping360",
+    "frontcam",
+    "bottomcam",
+    "modem",
+    "bar30_ps",
+    "sidescan",
+]
+
+# Match MAV-GUI backend sensorStartCommand (no redundant sros2 — env already loaded).
+START_CMDS: Dict[str, str] = {
+    "dvl": "ros2 launch dvl_a50 dvl_a50.launch.py ip_address:=192.168.194.95",
+    "sbg": "ros2 launch sbg_driver sbg_device_launch.py",
+    "ping2": "ros2 run ping_sonar_ros ping1d_node --ros-args -p port:=/dev/ping2",
+    "ping360": "ros2 run ping360_sonar ping360.py --ros-args -p device:=/dev/ping360",
+    "frontcam": (
+        "sleep 2 && ros2 run v4l2_camera v4l2_camera_node --ros-args "
+        "-r __ns:=/front -p video_device:=/dev/frontcam -p image_size:=[640,480] "
+        "-p framerate:=10 -p pixel_format:=YUYV -p output_encoding:=yuv422_yuy2"
+    ),
+    "bottomcam": (
+        "sleep 2 && ros2 run v4l2_camera v4l2_camera_node --ros-args "
+        "-r __ns:=/bottom -p video_device:=/dev/bottomcam -p image_size:=[640,480] "
+        "-p framerate:=10 -p pixel_format:=YUYV -p output_encoding:=yuv422_yuy2"
+    ),
+    "modem": "ros2 run modem_m64 modem_node --ros-args -r __ns:=/auv -p role:=b -p port:=/dev/modem",
+    "bar30_ps": "ros2 run arduino_ps arduino_ps",
+    "sidescan": "ros2 launch sidescan_ros2 sidescan.launch.py",
+}
+
+STOP_PATTERNS: Dict[str, str] = {
+    "dvl": "dvl",
+    "sbg": "sbg",
+    "ping2": "ping1d_node",
+    "ping360": "ping360",
+    "frontcam": "video_device:=/dev/frontcam",
+    "bottomcam": "video_device:=/dev/bottomcam",
+    "modem": "modem",
+    "bar30_ps": "arduino_ps|ms5837|bar30",
+    "sidescan": "sidescan",
+}
+
+NOISE_RE = re.compile(
+    r"pgrep|bash -lc|bash -ic|docker exec|mav_sensor_agent|mav_vehicle_agent"
+)
+
+SYMLINK_RE = re.compile(r'SYMLINK\+="([^"]+)"')
+
+
+def source_ros() -> None:
+    cmd = (
+        "bash -lc 'source /opt/ros/humble/setup.bash; "
+        "source /home/mavlab/ros2_ws/install/setup.bash 2>/dev/null; "
+        "source /workspaces/mavlab/code_ws/install/setup.bash 2>/dev/null; "
+        "env -0'"
+    )
+    out = subprocess.check_output(cmd, shell=True)
+    for entry in out.split(b"\0"):
+        if not entry or b"=" not in entry:
+            continue
+        k, _, v = entry.partition(b"=")
+        os.environ[k.decode("utf-8", "replace")] = v.decode("utf-8", "replace")
+
+
+def _pgrep_lines(pattern: str) -> List[str]:
+    try:
+        out = subprocess.check_output(
+            ["bash", "-lc", f"pgrep -u mavlab -af {pattern!r} || true"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        return []
+    return [
+        ln
+        for ln in out.splitlines()
+        if ln.strip() and not NOISE_RE.search(ln)
+    ]
+
+
+def running(sensor_id: str) -> bool:
+    if sensor_id in ("frontcam", "bottomcam"):
+        pat = STOP_PATTERNS[sensor_id]
+        ns = "__ns:=/front" if sensor_id == "frontcam" else "__ns:=/bottom"
+        lines = _pgrep_lines(pat)
+        if any("v4l2_camera" in ln for ln in lines):
+            return True
+        lines2 = _pgrep_lines("v4l2_camera")
+        return any(ns in ln for ln in lines2)
+
+    pat = STOP_PATTERNS.get(sensor_id, sensor_id)
+    # bar30 uses alternation — pgrep -f with | needs care; use grep.
+    if "|" in pat:
+        try:
+            out = subprocess.check_output(
+                [
+                    "bash",
+                    "-lc",
+                    f"pgrep -u mavlab -af . 2>/dev/null | grep -E {pat!r} "
+                    f"| grep -vE 'pgrep|bash -lc|bash -ic|docker exec|"
+                    f"mav_sensor_agent|mav_vehicle_agent' || true",
+                ],
+                text=True,
+                stderr=subprocess.DEVNULL,
+            )
+            return bool(out.strip())
+        except Exception:
+            return False
+    return len(_pgrep_lines(pat)) > 0
+
+
+def start_sensor(sensor_id: str) -> None:
+    cmd = START_CMDS[sensor_id]
+    # Use the ROS env sourced at agent startup. Do NOT use `bash -lc` — that re-loads
+    # bashrc (seconds) and hides the real node behind a filtered wrapper in pgrep,
+    # which is why the GUI saw exit=0 long before green.
+    subprocess.Popen(
+        cmd,
+        shell=True,
+        executable="/bin/bash",
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+        env=os.environ.copy(),
+    )
+
+
+def stop_sensor(sensor_id: str) -> None:
+    pat = STOP_PATTERNS[sensor_id]
+    subprocess.run(
+        ["bash", "-lc", f"pkill -u mavlab -9 -f {pat!r} >/dev/null 2>&1 || true"],
+        check=False,
+    )
+
+
+def activate_all() -> None:
+    for sid in SENSOR_IDS:
+        if not running(sid):
+            start_sensor(sid)
+
+
+def deactivate_all() -> None:
+    # Broad stop aligned with deactivate_sensors.sh, then leave ROS daemon alone
+    # (GUI may still need rosbridge / other nodes).
+    subprocess.run(
+        [
+            "bash",
+            "-lc",
+            "pkill -u mavlab -9 -f "
+            "'sbg|ping1d_node|ping360|dvl|video_device:=/dev/frontcam|"
+            "video_device:=/dev/bottomcam|modem|arduino_ps|ms5837|bar30|sidescan' "
+            ">/dev/null 2>&1 || true",
+        ],
+        check=False,
+    )
+
+
+def list_usb_devices() -> List[str]:
+    """Same output as repo usb_devices.sh — prefer host udev via nsenter.
+
+    Inside the privileged agent container, `udevadm` often lacks ID_SERIAL. mavlab can
+    `sudo -n nsenter` into PID 1 (same view as SSH → ./usb_devices.sh).
+    """
+    script = os.path.join(AUV_DIR, "usb_devices.sh")
+    if not os.path.isfile(script):
+        raise FileNotFoundError(f"missing {script}")
+    with open(script, "r", encoding="utf-8", errors="replace") as f:
+        script_body = f.read()
+
+    attempts: List[tuple] = []
+    nsenter = "/usr/bin/nsenter" if os.path.exists("/usr/bin/nsenter") else "/nsenter"
+    if os.path.exists(nsenter):
+        attempts.append(
+            (
+                ["sudo", "-n", nsenter, "-t", "1", "-m", "-u", "-i", "-n", "--", "bash", "-s"],
+                script_body,
+            )
+        )
+        attempts.append(
+            (
+                [nsenter, "-t", "1", "-m", "-u", "-i", "-n", "--", "bash", "-s"],
+                script_body,
+            )
+        )
+    attempts.append((["bash", script], None))
+
+    last_err = "usb_devices.sh failed"
+    for cmd, stdin in attempts:
+        try:
+            r = subprocess.run(
+                cmd,
+                input=stdin,
+                cwd=AUV_DIR if stdin is None else None,
+                capture_output=True,
+                text=True,
+                timeout=12,
+                check=False,
+            )
+        except FileNotFoundError:
+            continue
+        except Exception as e:
+            last_err = str(e)
+            continue
+        lines = [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
+        if r.returncode == 0 and lines:
+            return lines
+        if r.returncode == 0 and stdin is None:
+            # Local script can succeed with empty ID_SERIAL filter — keep trying better paths.
+            last_err = "no devices (local udev incomplete?)"
+            continue
+        if r.returncode == 0:
+            return lines
+        last_err = (r.stderr or r.stdout or last_err).strip()
+    # Last resort: local empty list is still a valid answer if nothing is plugged in.
+    try:
+        r = subprocess.run(
+            ["bash", script],
+            cwd=AUV_DIR,
+            capture_output=True,
+            text=True,
+            timeout=12,
+            check=False,
+        )
+        if r.returncode == 0:
+            return [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
+    except Exception as e:
+        last_err = str(e)
+    raise RuntimeError(last_err)
+
+
+def udev_mappings() -> List[dict]:
+    """Match MAV-GUI backend udevMapRemoteScript output shape."""
+    rules_file = os.path.join(AUV_DIR, "99-usb-serial.rules")
+    names: List[str] = []
+    if os.path.isfile(rules_file):
+        with open(rules_file, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                m = SYMLINK_RE.search(line)
+                if m:
+                    names.append(m.group(1))
+    mappings: List[dict] = []
+    for name in names:
+        path = f"/dev/{name}"
+        if os.path.exists(path):
+            real: Optional[str] = None
+            try:
+                real = os.path.realpath(path)
+            except OSError:
+                real = None
+            mappings.append(
+                {
+                    "symlink": path,
+                    "realDevice": real,
+                    "status": "active",
+                }
+            )
+        else:
+            mappings.append(
+                {
+                    "symlink": path,
+                    "realDevice": None,
+                    "status": "not_found",
+                }
+            )
+    return mappings
+
+
+def _nsenter_bash_cmds() -> List[List[str]]:
+    nsenter = "/usr/bin/nsenter" if os.path.exists("/usr/bin/nsenter") else "/nsenter"
+    if not os.path.exists(nsenter):
+        return []
+    return [
+        ["sudo", "-n", nsenter, "-t", "1", "-m", "-u", "-i", "-n", "--", "bash", "-s"],
+        [nsenter, "-t", "1", "-m", "-u", "-i", "-n", "--", "bash", "-s"],
+    ]
+
+
+def run_on_host(script: str, timeout: float = 30) -> Tuple[int, str, str]:
+    """Run a bash script in the host namespaces (must affect host /etc/udev, not the container)."""
+    last_err = "nsenter unavailable"
+    for cmd in _nsenter_bash_cmds():
+        try:
+            r = subprocess.run(
+                cmd,
+                input=script,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+        except FileNotFoundError:
+            continue
+        except Exception as e:
+            last_err = str(e)
+            continue
+        if r.returncode == 0:
+            return 0, r.stdout or "", r.stderr or ""
+        last_err = (r.stderr or r.stdout or f"exit {r.returncode}").strip()
+    raise RuntimeError(last_err)
+
+
+def apply_udev_rules() -> str:
+    """Install repo 99-usb-serial.rules on the Jetson host and reload udev."""
+    rules_path = os.path.join(AUV_DIR, "99-usb-serial.rules")
+    if not os.path.isfile(rules_path):
+        raise FileNotFoundError(f"missing {rules_path}")
+    raw = open(rules_path, "rb").read()
+    b64 = base64.b64encode(raw).decode("ascii")
+    host_script = (
+        "set -euo pipefail\n"
+        f"printf '%s' '{b64}' | base64 -d > /etc/udev/rules.d/99-usb-serial.rules\n"
+        "udevadm control --reload-rules\n"
+        "udevadm trigger\n"
+        "echo 'udev rules applied'\n"
+    )
+    code, stdout, stderr = run_on_host(host_script, timeout=25)
+    if code != 0:
+        raise RuntimeError(stderr or stdout or "udev apply failed")
+    # Symlinks can appear a moment after trigger; wait so the returned map is settled.
+    time.sleep(0.9)
+    return (stdout or "").strip() or "udev rules applied"
+
+
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, fmt: str, *args) -> None:
+        pass
+
+    def _json(self, code: int, obj: dict) -> None:
+        body = json.dumps(obj).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_OPTIONS(self) -> None:
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "*")
+        self.end_headers()
+
+    def do_GET(self) -> None:
+        path = urlparse(self.path).path
+        if path == "/health":
+            self._json(200, {"ok": True, "service": "mav_vehicle_agent"})
+            return
+        if path == "/sensors/status":
+            self._json(200, {"status": {sid: running(sid) for sid in SENSOR_IDS}})
+            return
+        m = re.match(r"^/sensors/status/([a-z0-9_]+)$", path)
+        if m:
+            sid = m.group(1)
+            if sid not in START_CMDS:
+                self._json(400, {"error": "unknown sensor id"})
+                return
+            self._json(200, {"id": sid, "running": running(sid)})
+            return
+        if path == "/devices/usb":
+            try:
+                devices = list_usb_devices()
+                self._json(200, {"ok": True, "code": 0, "devices": devices, "via": "vehicle-agent"})
+            except Exception as e:
+                self._json(500, {"ok": False, "code": 1, "error": str(e), "devices": []})
+            return
+        if path == "/devices/udev-map":
+            try:
+                mappings = udev_mappings()
+                self._json(
+                    200,
+                    {"ok": True, "code": 0, "mappings": mappings, "via": "vehicle-agent"},
+                )
+            except Exception as e:
+                self._json(500, {"ok": False, "code": 1, "error": str(e), "mappings": []})
+            return
+        self._json(404, {"error": "not found"})
+
+    def do_POST(self) -> None:
+        path = urlparse(self.path).path
+        if path == "/sensors/activate":
+            activate_all()
+            self._json(200, {"ok": True, "action": "activate"})
+            return
+        if path == "/sensors/deactivate":
+            deactivate_all()
+            self._json(200, {"ok": True, "action": "deactivate"})
+            return
+        if path == "/devices/udev":
+            try:
+                stdout = apply_udev_rules()
+                self._json(
+                    200,
+                    {
+                        "ok": True,
+                        "code": 0,
+                        "stdout": stdout,
+                        "stderr": "",
+                        "mappings": udev_mappings(),
+                        "via": "vehicle-agent",
+                    },
+                )
+            except Exception as e:
+                self._json(
+                    500,
+                    {
+                        "ok": False,
+                        "code": 1,
+                        "error": str(e),
+                        "stdout": "",
+                        "stderr": str(e),
+                        "mappings": [],
+                    },
+                )
+            return
+        m = re.match(r"^/sensors/(start|stop)/([a-z0-9_]+)$", path)
+        if not m:
+            self._json(404, {"error": "not found"})
+            return
+        action, sid = m.group(1), m.group(2)
+        if sid not in START_CMDS:
+            self._json(400, {"error": "unknown sensor id"})
+            return
+        try:
+            if action == "start":
+                start_sensor(sid)
+            else:
+                stop_sensor(sid)
+            self._json(200, {"ok": True, "code": 0, "id": sid, "action": action, "via": "agent"})
+        except Exception as e:
+            self._json(500, {"ok": False, "code": 1, "error": str(e)})
+
+
+def main() -> None:
+    print("[mav-vehicle-agent] sourcing ROS once…", flush=True)
+    source_ros()
+    print(f"[mav-vehicle-agent] listening on 0.0.0.0:{PORT} (auv={AUV_DIR})", flush=True)
+    ThreadingHTTPServer.allow_reuse_address = True
+    httpd = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
+
+    def _shutdown(*_args: object) -> None:
+        threading_shutdown = getattr(httpd, "shutdown", None)
+        if callable(threading_shutdown):
+            import threading
+
+            threading.Thread(target=httpd.shutdown, daemon=True).start()
+
+    signal.signal(signal.SIGTERM, _shutdown)
+    signal.signal(signal.SIGINT, _shutdown)
+    httpd.serve_forever()
+
+
+if __name__ == "__main__":
+    main()

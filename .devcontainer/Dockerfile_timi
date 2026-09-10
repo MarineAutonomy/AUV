@@ -151,17 +151,17 @@ RUN echo 'source /opt/ros/humble/setup.bash' >> /home/${USERNAME}/.bashrc \
  && echo "alias topics='ros2 topic list'" >> /home/${USERNAME}/.bashrc \
  && echo "alias nodes='ros2 node list'" >> /home/${USERNAME}/.bashrc
 
-RUN echo "alias sbg='sros2 && ros2 launch sbg_driver sbg_device_launch.py'" >> /home/${USERNAME}/.bashrc \
- && echo "alias dvl='sros2 && ros2 launch dvl_a50 dvl_a50.launch.py ip_address:='192.168.194.95''" >> /home/${USERNAME}/.bashrc \
- && echo "alias ping360='sros2 && ros2 run ping360_sonar ping360.py --ros-args -p device:=/dev/ping360'" >> /home/${USERNAME}/.bashrc \
- && echo "alias ping2='sros2 && ros2 run ping_sonar_ros ping1d_node --ros-args -p port:=/dev/ping2'" >> /home/${USERNAME}/.bashrc \
- && echo "alias frontcam='sros2 && sleep 2 && ros2 run v4l2_camera v4l2_camera_node --ros-args -r __ns:=/front -p video_device:=/dev/frontcam -p image_size:=[640,480] -p framerate:=10 -p pixel_format:=YUYV -p output_encoding:=yuv422_yuy2'" >> /home/${USERNAME}/.bashrc \
- && echo "alias bottomcam='sros2 && sleep 2 && ros2 run v4l2_camera v4l2_camera_node --ros-args -r __ns:=/bottom -p video_device:=/dev/bottomcam -p image_size:=[640,480] -p framerate:=10 -p pixel_format:=YUYV -p output_encoding:=yuv422_yuy2'" >> /home/${USERNAME}/.bashrc \
- && echo "alias webvid='sros2 && ros2 run web_video_server web_video_server --ros-args -p port:=8080'" >> /home/${USERNAME}/.bashrc \
- && echo "alias modem='sros2 && scode && ros2 run modem_m64 modem_node --ros-args -r __ns:=/auv -p role:=b -p port:=/dev/modem'" >> /home/${USERNAME}/.bashrc \
- && echo "alias bar30='scode && ros2 run arduino_ps arduino_ps'" >> /home/${USERNAME}/.bashrc \
- && echo "alias dvl_calibrate='sros2 && ros2 topic pub --once /dvl/config/command dvl_msgs/msg/ConfigCommand \"{command: calibrate_gyro}\"'" >> /home/${USERNAME}/.bashrc \
- && echo "alias dvl_reset='sros2 && ros2 topic pub --once /dvl/config/command dvl_msgs/msg/ConfigCommand \"{command: reset_dead_reckoning}\"'" >> /home/${USERNAME}/.bashrc \
- && echo "alias sidescan='sros2 && scode && ros2 launch sidescan_ros2 sidescan.launch.py'" >> /home/${USERNAME}/.bashrc
+RUN echo "alias sbg='ros2 launch sbg_driver sbg_device_launch.py'" >> /home/${USERNAME}/.bashrc \
+ && echo "alias dvl='ros2 launch dvl_a50 dvl_a50.launch.py ip_address:='192.168.194.95''" >> /home/${USERNAME}/.bashrc \
+ && echo "alias ping360='ros2 run ping360_sonar ping360.py --ros-args -p device:=/dev/ping360'" >> /home/${USERNAME}/.bashrc \
+ && echo "alias ping2='ros2 run ping_sonar_ros ping1d_node --ros-args -p port:=/dev/ping2'" >> /home/${USERNAME}/.bashrc \
+ && echo "alias frontcam='sleep 2 && ros2 run v4l2_camera v4l2_camera_node --ros-args -r __ns:=/front -p video_device:=/dev/frontcam -p image_size:=[640,480] -p framerate:=10 -p pixel_format:=YUYV -p output_encoding:=yuv422_yuy2'" >> /home/${USERNAME}/.bashrc \
+ && echo "alias bottomcam='sleep 2 && ros2 run v4l2_camera v4l2_camera_node --ros-args -r __ns:=/bottom -p video_device:=/dev/bottomcam -p image_size:=[640,480] -p framerate:=10 -p pixel_format:=YUYV -p output_encoding:=yuv422_yuy2'" >> /home/${USERNAME}/.bashrc \
+ && echo "alias webvid='ros2 run web_video_server web_video_server --ros-args -p port:=8080'" >> /home/${USERNAME}/.bashrc \
+ && echo "alias modem='ros2 run modem_m64 modem_node --ros-args -r __ns:=/auv -p role:=b -p port:=/dev/modem'" >> /home/${USERNAME}/.bashrc \
+ && echo "alias bar30='ros2 run arduino_ps arduino_ps'" >> /home/${USERNAME}/.bashrc \
+ && echo "alias dvl_calibrate='ros2 topic pub --once /dvl/config/command dvl_msgs/msg/ConfigCommand \"{command: calibrate_gyro}\"'" >> /home/${USERNAME}/.bashrc \
+ && echo "alias dvl_reset='ros2 topic pub --once /dvl/config/command dvl_msgs/msg/ConfigCommand \"{command: reset_dead_reckoning}\"'" >> /home/${USERNAME}/.bashrc \
+ && echo "alias sidescan='ros2 launch sidescan_ros2 sidescan.launch.py'" >> /home/${USERNAME}/.bashrc
 # -------------------- Expose Ports --------------------
 EXPOSE 9000 9001 9002 9003

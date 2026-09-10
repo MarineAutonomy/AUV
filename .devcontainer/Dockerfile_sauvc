@@ -120,13 +120,13 @@ RUN echo 'source /opt/ros/humble/setup.bash' >> /home/${USERNAME}/.bashrc \
  && echo "alias topics='ros2 topic list'" >> /home/${USERNAME}/.bashrc \
  && echo "alias nodes='ros2 node list'" >> /home/${USERNAME}/.bashrc
 
-RUN echo "alias sbg='sros2 && ros2 launch sbg_driver sbg_device_launch.py'" >> /home/${USERNAME}/.bashrc \
- && echo "alias gnc='sros2 && ros2 run gnc gnc'" >> /home/${USERNAME}/.bashrc \
- && echo "alias mavsim='sros2 && ros2 run mav_simulator simulate'" >> /home/${USERNAME}/.bashrc \
- && echo "alias zed='sros2 && ros2 launch zed_wrapper zed_camera.launch.py camera_model:=zed2i '" >> /home/${USERNAME}/.bashrc \
- && echo "alias dvl='sros2 && ros2 launch dvl_a50 dvl_a50.launch.py ip_address:='192.168.194.95''" >> /home/${USERNAME}/.bashrc \
- && echo "alias ping360='sros2 && ros2 run ping360_sonar ping360.py --ros-args -p device:=/dev/ping360'" >> /home/${USERNAME}/.bashrc \
- && echo "alias ping2='sros2 && ros2 run ping_sonar_ros ping1d_node --ros-args -p port:=/dev/ping2'" >> /home/${USERNAME}/.bashrc
+RUN echo "alias sbg='ros2 launch sbg_driver sbg_device_launch.py'" >> /home/${USERNAME}/.bashrc \
+ && echo "alias gnc='ros2 run gnc gnc'" >> /home/${USERNAME}/.bashrc \
+ && echo "alias mavsim='ros2 run mav_simulator simulate'" >> /home/${USERNAME}/.bashrc \
+ && echo "alias zed='ros2 launch zed_wrapper zed_camera.launch.py camera_model:=zed2i '" >> /home/${USERNAME}/.bashrc \
+ && echo "alias dvl='ros2 launch dvl_a50 dvl_a50.launch.py ip_address:='192.168.194.95''" >> /home/${USERNAME}/.bashrc \
+ && echo "alias ping360='ros2 run ping360_sonar ping360.py --ros-args -p device:=/dev/ping360'" >> /home/${USERNAME}/.bashrc \
+ && echo "alias ping2='ros2 run ping_sonar_ros ping1d_node --ros-args -p port:=/dev/ping2'" >> /home/${USERNAME}/.bashrc
 
 # -------------------- Expose Ports --------------------
 EXPOSE 9000 9001 9002 9003

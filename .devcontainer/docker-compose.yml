@@ -68,7 +68,7 @@ services:
     volumes:
       - ..:/workspaces/mavlab
   # Use the upstream launch file so rosapi_node starts too (GUI echo/plots need /rosapi/topic_type).
-    command: bash -ic "sros2 && scode && ros2 launch rosbridge_server rosbridge_websocket_launch.xml max_message_size:=10000000"
+    command: bash -ic "ros2 launch rosbridge_server rosbridge_websocket_launch.xml max_message_size:=10000000"
 
   # MJPEG HTTP streams for MAV GUI (ROS topics unchanged).
   # Example: http://<vehicle-ip>:8080/stream?topic=/front/image_raw
@@ -90,7 +90,7 @@ services:
       - CYCLONEDDS_URI=file:///workspaces/mavlab/.devcontainer/cyclonedds.xml
     volumes:
       - ..:/workspaces/mavlab
-    command: bash -ic "sros2 && scode && ros2 run web_video_server web_video_server --ros-args -p port:=8080"
+    command: bash -ic "ros2 run web_video_server web_video_server --ros-args -p port:=8080"
 
   # Foxglove Studio sidecar (ws://<vehicle-ip>:8765). Does not replace rosbridge for MAV GUI.
   foxglove_bridge:
@@ -111,4 +111,33 @@ services:
       - CYCLONEDDS_URI=file:///workspaces/mavlab/.devcontainer/cyclonedds.xml
     volumes:
       - ..:/workspaces/mavlab
-    command: bash -ic "sros2 && scode && ros2 launch foxglove_bridge foxglove_bridge_launch.xml port:=8765"
+    command: bash -ic "ros2 launch foxglove_bridge foxglove_bridge_launch.xml port:=8765"
+
+  # Vehicle agent for MAV-GUI: sensors + USB/udev reads (avoids SSH per click).
+  # Shares host PID/network with `auv` so process probes match the Sensors tab lights.
+  vehicle_agent:
+    image: aatmaj9/timi:2.0
+    restart: unless-stopped
+    container_name: auv_vehicle_agent
+    working_dir: /workspaces/mavlab
+    user: "mavlab"
+    privileged: true
+    network_mode: host
+    ipc: host
+    pid: host
+    stdin_open: true
+    tty: true
+    group_add:
+      - dialout
+      - video
+      - plugdev
+    environment:
+      - ROS_DOMAIN_ID=0
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - CYCLONEDDS_URI=file:///workspaces/mavlab/.devcontainer/cyclonedds.xml
+      - MAV_AGENT_PORT=9123
+      - MAV_AUV_DIR=/workspaces/mavlab
+    volumes:
+      - ..:/workspaces/mavlab
+      - /dev:/dev
+    command: bash -lc "python3 /workspaces/mavlab/.devcontainer/mav_vehicle_agent.py"

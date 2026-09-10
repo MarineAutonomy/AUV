@@ -4,7 +4,20 @@
 set -euo pipefail
 
 GS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-IMAGE="${AUV_GS_IMAGE:-auv-ground-station:latest}"
+REPO="${AUV_GS_IMAGE_REPO:-aatmaj9/auv-ground-station}"
+MAV_GUI_DATA_DIR="${MAV_GUI_DATA_DIR:-${HOME}/.local/share/mav-gui}"
+VERSION_FILE="${MAV_GUI_DATA_DIR}/gs_image_version"
+
+if [ -n "${AUV_GS_IMAGE:-}" ]; then
+  IMAGE="$AUV_GS_IMAGE"
+elif [ -n "${AUV_GS_IMAGE_VERSION:-}" ]; then
+  IMAGE="${REPO}:${AUV_GS_IMAGE_VERSION}"
+elif [ -f "$VERSION_FILE" ]; then
+  IMAGE="${REPO}:$(tr -d '[:space:]' < "$VERSION_FILE")"
+else
+  IMAGE="${REPO}:1.0"
+fi
+
 NAME="${AUV_GS_NAME:-auv_gs}"
 CYCLONE_XML="${GS_DIR}/cyclonedds.xml"
 
@@ -24,18 +37,28 @@ if ! command -v docker >/dev/null 2>&1; then
   exit 1
 fi
 if ! docker_cmd image inspect "$IMAGE" >/dev/null 2>&1; then
-  echo "ERROR: image '$IMAGE' missing. Run: ./setup_env.sh --docker" >&2
-  exit 1
+  echo "image '$IMAGE' missing locally — pulling…"
+  if ! docker_cmd pull "$IMAGE"; then
+    echo "ERROR: pull failed. Run: ./setup_env.sh --docker  (or push with ./build_gs_docker.sh <version>)" >&2
+    exit 1
+  fi
 fi
 if [ ! -f "$CYCLONE_XML" ]; then
   echo "ERROR: missing $CYCLONE_XML" >&2
   exit 1
 fi
 
-# Already up?
+WANT_ID="$(docker_cmd image inspect -f '{{.Id}}' "$IMAGE")"
+
+# If already running, only keep it when it is from the target image (not an older tag).
 if docker_cmd ps --format '{{.Names}}' | grep -qx "$NAME"; then
-  echo "ground-station container '$NAME' already running"
-  exit 0
+  HAVE_ID="$(docker_cmd inspect -f '{{.Image}}' "$NAME" 2>/dev/null || true)"
+  if [ -n "$HAVE_ID" ] && [ "$HAVE_ID" = "$WANT_ID" ]; then
+    echo "ground-station container '$NAME' already running from $IMAGE"
+    exit 0
+  fi
+  echo "container '$NAME' is running from a different image — recreating from $IMAGE…"
+  docker_cmd rm -f "$NAME" >/dev/null 2>&1 || true
 fi
 
 # Remove stale stopped container with same name
@@ -50,7 +73,7 @@ fi
 # Hot-plug joysticks: privileged helps /dev nodes appear inside the container
 extra_args+=(--privileged)
 
-echo "Starting ground-station container '$NAME' (idle)…"
+echo "Starting ground-station container '$NAME' (idle) from $IMAGE…"
 # Bypass image ENTRYPOINT for idle sleep — entrypoint sources ROS and used to crash with set -u.
 docker_cmd run -d \
   --name "$NAME" \
