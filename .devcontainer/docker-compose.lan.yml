@@ -14,3 +14,8 @@ services:
   foxglove_bridge:
     environment:
       - CYCLONEDDS_URI=file:///workspaces/mavlab/.devcontainer/cyclonedds_lan.xml
+
+  # Must match sookshma — agent spawns sensors in this container's env.
+  vehicle_agent:
+    environment:
+      - CYCLONEDDS_URI=file:///workspaces/mavlab/.devcontainer/cyclonedds_lan.xml

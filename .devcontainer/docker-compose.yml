@@ -36,7 +36,7 @@ services:
       - NVIDIA_DRIVER_CAPABILITIES=all
       - ROS_DOMAIN_ID=0
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-      - CYCLONEDDS_URI=file:///workspaces/mavlab/.devcontainer/cyclonedds.xml
+      - CYCLONEDDS_URI=file:///workspaces/mavlab/.devcontainer/cyclonedds_lan.xml
     deploy:
       resources:
         reservations:
@@ -64,7 +64,7 @@ services:
     environment:
       - ROS_DOMAIN_ID=0
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-      - CYCLONEDDS_URI=file:///workspaces/mavlab/.devcontainer/cyclonedds.xml
+      - CYCLONEDDS_URI=file:///workspaces/mavlab/.devcontainer/cyclonedds_lan.xml
     volumes:
       - ..:/workspaces/mavlab
   # Use the upstream launch file so rosapi_node starts too (GUI echo/plots need /rosapi/topic_type).
@@ -87,7 +87,7 @@ services:
     environment:
       - ROS_DOMAIN_ID=0
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-      - CYCLONEDDS_URI=file:///workspaces/mavlab/.devcontainer/cyclonedds.xml
+      - CYCLONEDDS_URI=file:///workspaces/mavlab/.devcontainer/cyclonedds_lan.xml
     volumes:
       - ..:/workspaces/mavlab
     command: bash -ic "ros2 run web_video_server web_video_server --ros-args -p port:=8080"
@@ -108,12 +108,12 @@ services:
     environment:
       - ROS_DOMAIN_ID=0
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-      - CYCLONEDDS_URI=file:///workspaces/mavlab/.devcontainer/cyclonedds.xml
+      - CYCLONEDDS_URI=file:///workspaces/mavlab/.devcontainer/cyclonedds_lan.xml
     volumes:
       - ..:/workspaces/mavlab
     command: bash -ic "ros2 launch foxglove_bridge foxglove_bridge_launch.xml port:=8765"
 
-  # Vehicle agent for MAV-GUI: sensors + USB/udev reads (avoids SSH per click).
+  # Vehicle agent for MAV-GUI: sensors, USB/udev, nav/control/missions/rosbag (avoids SSH).
   # Shares host PID/network with `auv` so process probes match the Sensors tab lights.
   vehicle_agent:
     image: aatmaj9/timi:2.0
@@ -134,7 +134,8 @@ services:
     environment:
       - ROS_DOMAIN_ID=0
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-      - CYCLONEDDS_URI=file:///workspaces/mavlab/.devcontainer/cyclonedds.xml
+      # Default LAN file (lan/wifi overlays override). Missing .xml made agent-started nodes crash.
+      - CYCLONEDDS_URI=file:///workspaces/mavlab/.devcontainer/cyclonedds_lan.xml
       - MAV_AGENT_PORT=9123
       - MAV_AUV_DIR=/workspaces/mavlab
     volumes:

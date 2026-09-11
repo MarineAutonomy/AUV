@@ -14,3 +14,7 @@ services:
   foxglove_bridge:
     environment:
       - CYCLONEDDS_URI=file:///workspaces/mavlab/.devcontainer/cyclonedds_wifi.nxml
+
+  vehicle_agent:
+    environment:
+      - CYCLONEDDS_URI=file:///workspaces/mavlab/.devcontainer/cyclonedds_wifi.nxml

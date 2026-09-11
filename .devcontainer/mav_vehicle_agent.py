@@ -2,7 +2,7 @@
 """MAV vehicle agent — runs on the vehicle (host network) for fast GUI ops.
 
 ROS is sourced once at process start. MAV-GUI calls http://<jetson>:9123 instead of
-SSH+docker-exec for sensors and device reads (USB / udev map).
+SSH+docker-exec for sensors, devices, nav/control/missions.
 """
 from __future__ import annotations
 
@@ -12,13 +12,19 @@ import os
 import re
 import signal
 import subprocess
+import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
+# Same directory as this file (mounted at /workspaces/mavlab/.devcontainer/).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import mav_vehicle_agent_stacks as stacks  # noqa: E402
+
 PORT = int(os.environ.get("MAV_AGENT_PORT", "9123"))
 AUV_DIR = os.environ.get("MAV_AUV_DIR", "/workspaces/mavlab")
+stacks.AUV_DIR = AUV_DIR
 
 SENSOR_IDS = [
     "dvl",
@@ -39,12 +45,12 @@ START_CMDS: Dict[str, str] = {
     "ping2": "ros2 run ping_sonar_ros ping1d_node --ros-args -p port:=/dev/ping2",
     "ping360": "ros2 run ping360_sonar ping360.py --ros-args -p device:=/dev/ping360",
     "frontcam": (
-        "sleep 2 && ros2 run v4l2_camera v4l2_camera_node --ros-args "
+        "ros2 run v4l2_camera v4l2_camera_node --ros-args "
         "-r __ns:=/front -p video_device:=/dev/frontcam -p image_size:=[640,480] "
         "-p framerate:=10 -p pixel_format:=YUYV -p output_encoding:=yuv422_yuy2"
     ),
     "bottomcam": (
-        "sleep 2 && ros2 run v4l2_camera v4l2_camera_node --ros-args "
+        "ros2 run v4l2_camera v4l2_camera_node --ros-args "
         "-r __ns:=/bottom -p video_device:=/dev/bottomcam -p image_size:=[640,480] "
         "-p framerate:=10 -p pixel_format:=YUYV -p output_encoding:=yuv422_yuy2"
     ),
@@ -65,8 +71,21 @@ STOP_PATTERNS: Dict[str, str] = {
     "sidescan": "sidescan",
 }
 
+# Udev symlink basenames required before On. None = always eligible (e.g. Ethernet).
+SENSOR_DEV_SYMLINKS: Dict[str, Optional[List[str]]] = {
+    "dvl": None,
+    "sbg": ["sbg"],
+    "ping2": ["ping2"],
+    "ping360": ["ping360"],
+    "frontcam": ["frontcam"],
+    "bottomcam": ["bottomcam"],
+    "modem": ["modem"],
+    "bar30_ps": ["arduino", "arduino_mega", "arduino_uno", "portenta"],
+    "sidescan": None,
+}
+
 NOISE_RE = re.compile(
-    r"pgrep|bash -lc|bash -ic|docker exec|mav_sensor_agent|mav_vehicle_agent"
+    r"pgrep|bash -lc|bash -ic|bash -c|docker exec|mav_sensor_agent|mav_vehicle_agent|sleep "
 )
 
 SYMLINK_RE = re.compile(r'SYMLINK\+="([^"]+)"')
@@ -105,13 +124,16 @@ def _pgrep_lines(pattern: str) -> List[str]:
 
 def running(sensor_id: str) -> bool:
     if sensor_id in ("frontcam", "bottomcam"):
-        pat = STOP_PATTERNS[sensor_id]
+        # Only count a live v4l2_camera_node — not a shell wrapper whose cmdline
+        # embeds the same strings (that caused green → red flicker after On).
+        device = STOP_PATTERNS[sensor_id]
         ns = "__ns:=/front" if sensor_id == "frontcam" else "__ns:=/bottom"
-        lines = _pgrep_lines(pat)
-        if any("v4l2_camera" in ln for ln in lines):
-            return True
-        lines2 = _pgrep_lines("v4l2_camera")
-        return any(ns in ln for ln in lines2)
+        for ln in _pgrep_lines("v4l2_camera"):
+            if "v4l2_camera_node" not in ln and "v4l2_camera " not in ln:
+                continue
+            if device in ln or ns in ln:
+                return True
+        return False
 
     pat = STOP_PATTERNS.get(sensor_id, sensor_id)
     # bar30 uses alternation — pgrep -f with | needs care; use grep.
@@ -122,8 +144,8 @@ def running(sensor_id: str) -> bool:
                     "bash",
                     "-lc",
                     f"pgrep -u mavlab -af . 2>/dev/null | grep -E {pat!r} "
-                    f"| grep -vE 'pgrep|bash -lc|bash -ic|docker exec|"
-                    f"mav_sensor_agent|mav_vehicle_agent' || true",
+                    f"| grep -vE 'pgrep|bash -lc|bash -ic|bash -c|docker exec|"
+                    f"mav_sensor_agent|mav_vehicle_agent|sleep ' || true",
                 ],
                 text=True,
                 stderr=subprocess.DEVNULL,
@@ -134,20 +156,46 @@ def running(sensor_id: str) -> bool:
     return len(_pgrep_lines(pat)) > 0
 
 
+def sensor_device_ready(sensor_id: str) -> bool:
+    names = SENSOR_DEV_SYMLINKS.get(sensor_id)
+    if names is None:
+        return True
+    return any(os.path.exists(f"/dev/{n}") for n in names)
+
+
 def start_sensor(sensor_id: str) -> None:
+    if not sensor_device_ready(sensor_id):
+        names = SENSOR_DEV_SYMLINKS.get(sensor_id) or []
+        need = ", ".join(f"/dev/{n}" for n in names)
+        raise RuntimeError(f"{sensor_id}: device symlink not active ({need})")
     cmd = START_CMDS[sensor_id]
-    # Use the ROS env sourced at agent startup. Do NOT use `bash -lc` — that re-loads
-    # bashrc (seconds) and hides the real node behind a filtered wrapper in pgrep,
-    # which is why the GUI saw exit=0 long before green.
-    subprocess.Popen(
-        cmd,
-        shell=True,
-        executable="/bin/bash",
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-        env=os.environ.copy(),
-    )
+
+    def _spawn() -> None:
+        # Brief settle for USB cams without embedding `sleep` in the process cmdline
+        # (that used to trip status probes and make the GUI flip On→Off).
+        if sensor_id in ("frontcam", "bottomcam"):
+            time.sleep(0.4)
+        log_path = f"/tmp/mav_{sensor_id}.log"
+        try:
+            log_f = open(log_path, "ab", buffering=0)
+        except Exception:
+            log_f = subprocess.DEVNULL
+        subprocess.Popen(
+            cmd,
+            shell=True,
+            executable="/bin/bash",
+            stdout=log_f,
+            stderr=log_f,
+            start_new_session=True,
+            env=os.environ.copy(),
+        )
+
+    if sensor_id in ("frontcam", "bottomcam"):
+        import threading
+
+        threading.Thread(target=_spawn, daemon=True).start()
+    else:
+        _spawn()
 
 
 def stop_sensor(sensor_id: str) -> None:
@@ -160,24 +208,18 @@ def stop_sensor(sensor_id: str) -> None:
 
 def activate_all() -> None:
     for sid in SENSOR_IDS:
-        if not running(sid):
+        if running(sid) or not sensor_device_ready(sid):
+            continue
+        try:
             start_sensor(sid)
+        except RuntimeError:
+            continue
 
 
 def deactivate_all() -> None:
-    # Broad stop aligned with deactivate_sensors.sh, then leave ROS daemon alone
-    # (GUI may still need rosbridge / other nodes).
-    subprocess.run(
-        [
-            "bash",
-            "-lc",
-            "pkill -u mavlab -9 -f "
-            "'sbg|ping1d_node|ping360|dvl|video_device:=/dev/frontcam|"
-            "video_device:=/dev/bottomcam|modem|arduino_ps|ms5837|bar30|sidescan' "
-            ">/dev/null 2>&1 || true",
-        ],
-        check=False,
-    )
+    for sid in SENSOR_IDS:
+        if running(sid):
+            stop_sensor(sid)
 
 
 def list_usb_devices() -> List[str]:
@@ -362,7 +404,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_OPTIONS(self) -> None:
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "*")
         self.end_headers()
 
@@ -398,6 +440,11 @@ class Handler(BaseHTTPRequestHandler):
                 )
             except Exception as e:
                 self._json(500, {"ok": False, "code": 1, "error": str(e), "mappings": []})
+            return
+        handled = stacks.handle_get(path)
+        if handled is not None:
+            code, obj = handled
+            self._json(code, obj)
             return
         self._json(404, {"error": "not found"})
 
@@ -439,21 +486,71 @@ class Handler(BaseHTTPRequestHandler):
                 )
             return
         m = re.match(r"^/sensors/(start|stop)/([a-z0-9_]+)$", path)
-        if not m:
-            self._json(404, {"error": "not found"})
+        if m:
+            action, sid = m.group(1), m.group(2)
+            if sid not in START_CMDS:
+                self._json(400, {"error": "unknown sensor id"})
+                return
+            try:
+                if action == "start":
+                    start_sensor(sid)
+                else:
+                    stop_sensor(sid)
+                self._json(200, {"ok": True, "code": 0, "id": sid, "action": action, "via": "agent"})
+            except RuntimeError as e:
+                self._json(
+                    409,
+                    {
+                        "ok": False,
+                        "code": 1,
+                        "id": sid,
+                        "action": action,
+                        "error": str(e),
+                        "stdout": "",
+                        "stderr": str(e),
+                        "via": "agent",
+                    },
+                )
+            except Exception as e:
+                self._json(500, {"ok": False, "code": 1, "error": str(e)})
             return
-        action, sid = m.group(1), m.group(2)
-        if sid not in START_CMDS:
-            self._json(400, {"error": "unknown sensor id"})
-            return
+
+        length = int(self.headers.get("Content-Length", "0") or "0")
+        raw = self.rfile.read(length) if length > 0 else b"{}"
         try:
-            if action == "start":
-                start_sensor(sid)
-            else:
-                stop_sensor(sid)
-            self._json(200, {"ok": True, "code": 0, "id": sid, "action": action, "via": "agent"})
-        except Exception as e:
-            self._json(500, {"ok": False, "code": 1, "error": str(e)})
+            body = json.loads(raw.decode("utf-8") or "{}")
+        except Exception:
+            body = {}
+        handled = stacks.handle_post(path, body if isinstance(body, dict) else {})
+        if handled is not None:
+            code, obj = handled
+            self._json(code, obj)
+            return
+        self._json(404, {"error": "not found"})
+
+    def do_PUT(self) -> None:
+        path = urlparse(self.path).path
+        length = int(self.headers.get("Content-Length", "0") or "0")
+        raw = self.rfile.read(length) if length > 0 else b"{}"
+        try:
+            body = json.loads(raw.decode("utf-8") or "{}")
+        except Exception:
+            body = {}
+        handled = stacks.handle_put(path, body if isinstance(body, dict) else {})
+        if handled is not None:
+            code, obj = handled
+            self._json(code, obj)
+            return
+        self._json(404, {"error": "not found"})
+
+    def do_DELETE(self) -> None:
+        path = urlparse(self.path).path
+        handled = stacks.handle_delete(path)
+        if handled is not None:
+            code, obj = handled
+            self._json(code, obj)
+            return
+        self._json(404, {"error": "not found"})
 
 
 def main() -> None:
