@@ -1,9 +1,9 @@
-# Ground-station ROS 2 Humble image: joy_node + auv_joy_teleop.
-# Build+push (repo root):  ./build_gs_docker.sh 1.0
-# Local build:  docker build --build-arg GS_IMAGE_VERSION=1.0 -t aatmaj9/auv-ground-station:1.0 -f Dockerfile .
-# Run:    ./scripts/run_joy_docker.sh
+# Ground-station ROS 2 Humble image: acoustic modem (role a) for MAV-GUI AppImage PCs.
+# Build+push (repo root):  ./build_gs_docker.sh 1.1
+# Local build:  docker build --build-arg GS_IMAGE_VERSION=1.1 -t aatmaj9/auv-ground-station:1.1 -f Dockerfile .
 #
-# Host needs: Docker, joystick device, cyclonedds.xml (mounted), network host for Jetson DDS.
+# Host needs: Docker, USB modem under /dev, cyclonedds.xml, host network.
+# Xbox teleop is NOT here — MAV-GUI uses the browser Gamepad API → vehicle rosbridge.
 
 FROM ros:humble-ros-base
 
@@ -19,23 +19,21 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ros-humble-rmw-cyclonedds-cpp \
-      ros-humble-joy \
       python3-colcon-common-extensions \
       python3-pip \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && pip3 install --no-cache-dir wlmodem pyserial crcmod cobs
 
-# Package source (built into the image)
 WORKDIR /ws
-COPY ros2_ws/src/auv_joy_teleop /ws/src/auv_joy_teleop
+COPY ros2_ws/src/modem_m64 /ws/src/modem_m64
 
 RUN bash -lc "source /opt/ros/humble/setup.bash && \
-      colcon build --packages-select auv_joy_teleop --symlink-install"
+      colcon build --packages-select modem_m64 --symlink-install"
 
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-# Host mounts: /gs/cyclonedds.xml, /tmp (GUI status/PWM files), /dev/input
 VOLUME ["/gs", "/tmp"]
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["ros2", "launch", "auv_joy_teleop", "joy_teleop.launch.py"]
+CMD ["sleep", "infinity"]

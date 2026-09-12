@@ -19,7 +19,8 @@
     <Internal>
       <SocketReceiveBufferSize min="10MB"/>
       <Watermarks>
-        <WhcHigh>500kB</WhcHigh>
+        <!-- 1280x720 rgb8 ≈ 2.8MB/frame; keep headroom for a few samples. -->
+        <WhcHigh>16MB</WhcHigh>
       </Watermarks>
     </Internal>
   </Domain>

@@ -1,8 +1,13 @@
-# Ground station (optional / legacy)
+# Ground station
 
-MAV-GUI Xbox teleop now uses the **browser Gamepad API → rosbridge** (Jetson `:9090`).
-You do **not** need this Docker / `auv_joy_teleop` stack for normal joystick operation.
+ROS 2 Humble **Docker image** for the operator PC. Used by MAV-GUI AppImage for the **PC acoustic modem (role a)**.
 
-**Normal use:** run MAV-GUI → plug/pair Xbox → Xbox tab → **Connect** → press **X** to arm.
+Xbox / joystick teleop is **not** here. The GUI uses the browser **Gamepad API → vehicle rosbridge** (`:9090`).
 
-This folder remains only if you want the optional native ROS joy path over CycloneDDS again (`scripts/`, `ros2_ws/src/auv_joy_teleop/`).
+**Operator PC needs:** Docker, this image (`auv_gs` container), USB modem (`/dev/modem`).
+
+```bash
+./setup_env.sh --docker
+```
+
+Then in MAV-GUI → **Modem** → PC MODEM **On**.

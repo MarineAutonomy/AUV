@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Source ROS + workspace, then exec the command (default: joy launch).
+# Source ROS + workspace, then exec the command.
 # ROS setup.bash references optional unset vars — incompatible with `set -u`.
 set -eo pipefail
 set +u

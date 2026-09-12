@@ -15,7 +15,7 @@ NUM_RE = re.compile(r"^\s*([a-z_]+):\s*([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)\s*$")
 ARR_RE = re.compile(r"^\s*([a-z_]+):\s*\[(.*)\]\s*$")
 SENSOR_RE = re.compile(r"^\s*-\s*sensor_type:\s*([A-Z0-9_]+)\s*$")
 NOISE_RE = re.compile(
-    r"pgrep|bash -lc|bash -ic|docker exec|mav_sensor_agent|mav_vehicle_agent"
+    r"pgrep|\bgrep\b|bash -lc|bash -ic|docker exec|mav_sensor_agent|mav_vehicle_agent"
 )
 
 CONTROL_2D_KEYS = [
@@ -137,7 +137,7 @@ def process_running(pattern: str) -> bool:
                     "bash",
                     "-lc",
                     f"pgrep -u mavlab -af . 2>/dev/null | grep -E {pattern!r} "
-                    f"| grep -vE 'pgrep|bash -lc|bash -ic|docker exec|"
+                    f"| grep -vE 'pgrep|grep|bash -lc|bash -ic|docker exec|"
                     f"mav_sensor_agent|mav_vehicle_agent' || true",
                 ],
                 text=True,

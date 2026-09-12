@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Ensure the long-lived ground-station container is running (started at setup).
-# Joy Connect then only docker-execs ros2 launch into this container.
+# MAV-GUI docker-execs the PC acoustic modem (role a) into this container.
 set -euo pipefail
 
 GS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -63,14 +63,12 @@ fi
 
 # Remove stale stopped container with same name
 docker_cmd rm -f "$NAME" >/dev/null 2>&1 || true
-# Legacy one-shot name from older builds
+# Drop leftover joy-era container name
 docker_cmd rm -f "${AUV_GS_JOY_NAME:-auv_gs_joy}" >/dev/null 2>&1 || true
 
 extra_args=()
-if [ -d /dev/input ]; then
-  extra_args+=(-v /dev/input:/dev/input)
-fi
-# Hot-plug joysticks: privileged helps /dev nodes appear inside the container
+# USB acoustic modem (and any other /dev nodes)
+extra_args+=(-v /dev:/dev)
 extra_args+=(--privileged)
 
 echo "Starting ground-station container '$NAME' (idle) from $IMAGE…"
@@ -90,4 +88,4 @@ docker_cmd run -d \
   "$IMAGE" \
   infinity
 
-echo "ground-station container '$NAME' is up (Connect will start joy inside it)"
+echo "ground-station container '$NAME' is up (Modem tab starts role a inside it)"

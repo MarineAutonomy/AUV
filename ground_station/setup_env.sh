@@ -68,7 +68,7 @@ patch_cyclone_xml() {
   local iface="$1"
   [ -f "$CYCLONE_XML" ] || die "missing $CYCLONE_XML"
 
-  # Rewrite Wi‑Fi NIC only — never overwrite loopback (lo) used for same-PC /joy.
+  # Rewrite Wi‑Fi NIC only — never overwrite loopback (lo) used for same-PC DDS.
   if command -v python3 >/dev/null 2>&1; then
     JETSON_LAN_IP="$JETSON_LAN_IP" JETSON_WIFI_IP="$JETSON_WIFI_IP" CYCLONE_XML="$CYCLONE_XML" WIFI_IFACE="$iface" python3 - <<'PY'
 import os, re
@@ -160,7 +160,6 @@ apt_install_ros() {
   local -a pkgs=(
     ros-humble-desktop
     ros-humble-rmw-cyclonedds-cpp
-    ros-humble-joy
     python3-colcon-common-extensions
   )
   local missing=()
@@ -223,15 +222,15 @@ EOF
   log "sysctl: net.core.rmem_max=$rmem"
 }
 
-build_joy() {
+build_modem() {
   [ -f /opt/ros/humble/setup.bash ] || die "ROS Humble missing after apt install"
   source_ros_file /opt/ros/humble/setup.bash || die "failed to source ROS Humble"
   command -v colcon >/dev/null 2>&1 || die "colcon not found (python3-colcon-common-extensions)"
 
   mkdir -p "$GS_DIR/ros2_ws/src"
   cd "$GS_DIR/ros2_ws"
-  log "colcon: building auv_joy_teleop…"
-  colcon build --packages-select auv_joy_teleop
+  log "colcon: building modem_m64…"
+  colcon build --packages-select modem_m64
   source_ros_file "$GS_DIR/ros2_ws/install/setup.bash" || die "failed to source ros2_ws install"
   log "colcon: OK"
 }
@@ -276,7 +275,7 @@ install_docker() {
 
 build_docker_image() {
   [ -f "$GS_DIR/Dockerfile" ] || die "missing $GS_DIR/Dockerfile"
-  chmod +x "$GS_DIR/docker/entrypoint.sh" "$GS_DIR/scripts/run_joy_docker.sh" 2>/dev/null || true
+  chmod +x "$GS_DIR/docker/entrypoint.sh" "$GS_DIR/scripts/ensure_gs_container.sh" 2>/dev/null || true
   local ver="${AUV_GS_IMAGE_VERSION:-0.0.0}"
   log "docker: building $DOCKER_IMAGE (several minutes on first run)…"
   if ! docker_cmd build \
@@ -353,9 +352,7 @@ PY
 ensure_docker_image() {
   install_docker
   chmod +x "$GS_DIR/docker/entrypoint.sh" \
-    "$GS_DIR/scripts/run_joy_docker.sh" \
-    "$GS_DIR/scripts/ensure_gs_container.sh" \
-    "$GS_DIR/scripts/stop_joy_docker.sh" 2>/dev/null || true
+    "$GS_DIR/scripts/ensure_gs_container.sh" 2>/dev/null || true
 
   resolve_docker_image
   export AUV_GS_IMAGE="$DOCKER_IMAGE"
@@ -407,11 +404,6 @@ run_self_test() {
     else
       fail "image $DOCKER_IMAGE missing"
     fi
-    if [ -x "$GS_DIR/scripts/run_joy_docker.sh" ]; then
-      pass "scripts/run_joy_docker.sh"
-    else
-      fail "scripts/run_joy_docker.sh missing/not executable"
-    fi
     if [ -x "$GS_DIR/scripts/ensure_gs_container.sh" ]; then
       pass "scripts/ensure_gs_container.sh"
     else
@@ -435,15 +427,10 @@ run_self_test() {
     else
       fail "ros2 not on PATH"
     fi
-    if ros2 pkg prefix auv_joy_teleop >/dev/null 2>&1; then
-      pass "package auv_joy_teleop found"
+    if ros2 pkg prefix modem_m64 >/dev/null 2>&1; then
+      pass "package modem_m64 found"
     else
-      fail "package auv_joy_teleop not found"
-    fi
-    if ros2 pkg prefix joy >/dev/null 2>&1; then
-      pass "package joy found"
-    else
-      fail "package joy not found"
+      fail "package modem_m64 not found"
     fi
   fi
 
@@ -529,8 +516,8 @@ Container:    ${AUV_GS_NAME:-auv_gs} (idle — stays running)
 Jetson LAN:   $JETSON_LAN_IP
 Jetson Wi‑Fi: $JETSON_WIFI_IP
 
-Joy (CLI):    $GS_DIR/scripts/run_joy_docker.sh
-Or use MAV-GUI Xbox tab → Connect (starts joy inside the container)
+Modem:        MAV-GUI → Modem tab → PC MODEM On (role a inside auv_gs)
+Xbox:         MAV-GUI Gamepad API → vehicle rosbridge (not this container)
 
 Re-test:      ./setup_env.sh --test
 Native ROS:   ./setup_env.sh --native
@@ -544,7 +531,7 @@ Cyclone NIC:  ${iface:-unknown}
 Jetson LAN:   $JETSON_LAN_IP
 Jetson Wi‑Fi: $JETSON_WIFI_IP
 
-  ros2 launch auv_joy_teleop joy_teleop.launch.py
+  ros2 run modem_m64 modem_node --ros-args -r __ns:=/gs -p role:=a -p port:=/dev/modem
 
 Re-test:      ./setup_env.sh --test
 Docker mode:  ./setup_env.sh --docker
@@ -577,7 +564,7 @@ bootstrap_docker() {
   install_bashrc
   QUIET=0 apply_env
   echo
-  chmod +x "$GS_DIR/scripts/ensure_gs_container.sh" "$GS_DIR/scripts/run_joy_docker.sh" "$GS_DIR/scripts/stop_joy_docker.sh" 2>/dev/null || true
+  chmod +x "$GS_DIR/scripts/ensure_gs_container.sh" 2>/dev/null || true
   bash "$GS_DIR/scripts/ensure_gs_container.sh"
   echo
   run_self_test
@@ -606,7 +593,7 @@ bootstrap_native() {
   echo
   install_sysctl_buffers
   echo
-  build_joy
+  build_modem
   echo
   install_bashrc
   QUIET=0 apply_env

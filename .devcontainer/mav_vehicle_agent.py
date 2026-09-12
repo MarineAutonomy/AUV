@@ -47,12 +47,12 @@ START_CMDS: Dict[str, str] = {
     "frontcam": (
         "ros2 run v4l2_camera v4l2_camera_node --ros-args "
         "-r __ns:=/front -p video_device:=/dev/frontcam -p image_size:=[640,480] "
-        "-p framerate:=10 -p pixel_format:=YUYV -p output_encoding:=yuv422_yuy2"
+        "-p framerate:=20.0 -p pixel_format:=YUYV -p output_encoding:=yuv422_yuy2"
     ),
     "bottomcam": (
         "ros2 run v4l2_camera v4l2_camera_node --ros-args "
         "-r __ns:=/bottom -p video_device:=/dev/bottomcam -p image_size:=[640,480] "
-        "-p framerate:=10 -p pixel_format:=YUYV -p output_encoding:=yuv422_yuy2"
+        "-p framerate:=20.0 -p pixel_format:=YUYV -p output_encoding:=yuv422_yuy2"
     ),
     "modem": "ros2 run modem_m64 modem_node --ros-args -r __ns:=/auv -p role:=b -p port:=/dev/modem",
     "bar30_ps": "ros2 run arduino_ps arduino_ps",
@@ -71,7 +71,8 @@ STOP_PATTERNS: Dict[str, str] = {
     "sidescan": "sidescan",
 }
 
-# Udev symlink basenames required before On. None = always eligible (e.g. Ethernet).
+# Udev symlink basenames required before On. None = no USB symlink gate
+# (sidescan / dvl require ethernet peers — see sensor_device_ready).
 SENSOR_DEV_SYMLINKS: Dict[str, Optional[List[str]]] = {
     "dvl": None,
     "sbg": ["sbg"],
@@ -85,7 +86,7 @@ SENSOR_DEV_SYMLINKS: Dict[str, Optional[List[str]]] = {
 }
 
 NOISE_RE = re.compile(
-    r"pgrep|bash -lc|bash -ic|bash -c|docker exec|mav_sensor_agent|mav_vehicle_agent|sleep "
+    r"pgrep|\bgrep\b|bash -lc|bash -ic|bash -c|docker exec|mav_sensor_agent|mav_vehicle_agent|sleep "
 )
 
 SYMLINK_RE = re.compile(r'SYMLINK\+="([^"]+)"')
@@ -144,7 +145,7 @@ def running(sensor_id: str) -> bool:
                     "bash",
                     "-lc",
                     f"pgrep -u mavlab -af . 2>/dev/null | grep -E {pat!r} "
-                    f"| grep -vE 'pgrep|bash -lc|bash -ic|bash -c|docker exec|"
+                    f"| grep -vE 'pgrep|grep|bash -lc|bash -ic|bash -c|docker exec|"
                     f"mav_sensor_agent|mav_vehicle_agent|sleep ' || true",
                 ],
                 text=True,
@@ -157,6 +158,11 @@ def running(sensor_id: str) -> bool:
 
 
 def sensor_device_ready(sensor_id: str) -> bool:
+    if sensor_id == "sidescan":
+        # SS450 package needs both static sonar IPs reachable.
+        return _ping_host("192.168.194.92") and _ping_host("192.168.194.93")
+    if sensor_id == "dvl":
+        return _ping_host("192.168.194.95")
     names = SENSOR_DEV_SYMLINKS.get(sensor_id)
     if names is None:
         return True
@@ -164,7 +170,17 @@ def sensor_device_ready(sensor_id: str) -> bool:
 
 
 def start_sensor(sensor_id: str) -> None:
+    if running(sensor_id):
+        # Idempotent: never spawn a second process (cams used to double-start when
+        # status briefly showed red / Activate All raced with On).
+        return
     if not sensor_device_ready(sensor_id):
+        if sensor_id == "sidescan":
+            raise RuntimeError(
+                "sidescan: SS450 inactive — both 192.168.194.92 and 192.168.194.93 must be up"
+            )
+        if sensor_id == "dvl":
+            raise RuntimeError("dvl: DVL inactive — 192.168.194.95 must be up")
         names = SENSOR_DEV_SYMLINKS.get(sensor_id) or []
         need = ", ".join(f"/dev/{n}" for n in names)
         raise RuntimeError(f"{sensor_id}: device symlink not active ({need})")
@@ -332,6 +348,86 @@ def udev_mappings() -> List[dict]:
     return mappings
 
 
+# Static LAN peers for Sensors that are not USB/udev (ping from vehicle).
+ETHERNET_DEVICES = [
+    {
+        "id": "ss450",
+        "label": "SS450",
+        "endpoints": [
+            {"name": "sonar_a", "host": "192.168.194.92"},
+            {"name": "sonar_b", "host": "192.168.194.93"},
+        ],
+    },
+    {
+        "id": "dvl",
+        "label": "DVL",
+        "endpoints": [
+            {"name": "dvl", "host": "192.168.194.95"},
+        ],
+    },
+]
+
+
+def _ping_host(host: str, timeout_s: float = 0.8) -> bool:
+    """ICMP reachability from the vehicle (host network)."""
+    try:
+        # -c 1 one probe; -W timeout seconds (iputils on Ubuntu).
+        r = subprocess.run(
+            ["ping", "-c", "1", "-W", str(max(1, int(timeout_s))), host],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=timeout_s + 0.5,
+            check=False,
+        )
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+def ethernet_devices() -> List[dict]:
+    """ACTIVE/INACTIVE for DVL + SS450 static IPs (both SS450 sonars required for active)."""
+    import concurrent.futures
+
+    hosts: List[str] = []
+    for dev in ETHERNET_DEVICES:
+        for ep in dev["endpoints"]:
+            hosts.append(ep["host"])
+    reach: Dict[str, bool] = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(hosts) or 1) as pool:
+        futs = {pool.submit(_ping_host, h): h for h in hosts}
+        for fut in concurrent.futures.as_completed(futs):
+            reach[futs[fut]] = bool(fut.result())
+
+    out: List[dict] = []
+    for dev in ETHERNET_DEVICES:
+        endpoints = []
+        for ep in dev["endpoints"]:
+            ok = reach.get(ep["host"], False)
+            endpoints.append(
+                {
+                    "name": ep["name"],
+                    "host": ep["host"],
+                    "status": "active" if ok else "inactive",
+                }
+            )
+        ups = sum(1 for e in endpoints if e["status"] == "active")
+        if ups == len(endpoints) and ups > 0:
+            status = "active"
+        elif ups == 0:
+            status = "inactive"
+        else:
+            status = "partial"
+        out.append(
+            {
+                "id": dev["id"],
+                "label": dev["label"],
+                "status": status,
+                "endpoints": endpoints,
+            }
+        )
+    return out
+
+
 def _nsenter_bash_cmds() -> List[List[str]]:
     nsenter = "/usr/bin/nsenter" if os.path.exists("/usr/bin/nsenter") else "/nsenter"
     if not os.path.exists(nsenter):
@@ -368,6 +464,7 @@ def run_on_host(script: str, timeout: float = 30) -> Tuple[int, str, str]:
 
 def apply_udev_rules() -> str:
     """Install repo 99-usb-serial.rules on the Jetson host and reload udev."""
+
     rules_path = os.path.join(AUV_DIR, "99-usb-serial.rules")
     if not os.path.isfile(rules_path):
         raise FileNotFoundError(f"missing {rules_path}")
@@ -440,6 +537,16 @@ class Handler(BaseHTTPRequestHandler):
                 )
             except Exception as e:
                 self._json(500, {"ok": False, "code": 1, "error": str(e), "mappings": []})
+            return
+        if path == "/devices/ethernet":
+            try:
+                devices = ethernet_devices()
+                self._json(
+                    200,
+                    {"ok": True, "code": 0, "devices": devices, "via": "vehicle-agent"},
+                )
+            except Exception as e:
+                self._json(500, {"ok": False, "code": 1, "error": str(e), "devices": []})
             return
         handled = stacks.handle_get(path)
         if handled is not None:

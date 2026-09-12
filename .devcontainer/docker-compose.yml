@@ -71,7 +71,7 @@ services:
     command: bash -ic "ros2 launch rosbridge_server rosbridge_websocket_launch.xml max_message_size:=10000000"
 
   # MJPEG HTTP streams for MAV GUI (ROS topics unchanged).
-  # Example: http://<vehicle-ip>:8080/stream?topic=/front/image_raw
+  # Example: http://<vehicle-ip>:8080/stream?topic=/front/image_raw/compressed
   web_video_server:
     image: aatmaj9/timi:2.0
     restart: unless-stopped

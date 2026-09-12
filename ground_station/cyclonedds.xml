@@ -3,7 +3,7 @@
   Ground station CycloneDDS — see ground_station/README.md
 
   Peers:
-    - 127.0.0.1         same PC (joy_node ↔ teleop ↔ echo) via unicast
+    - 127.0.0.1         same PC (local ROS nodes) via unicast
     - 192.168.194.10    Jetson LAN (fixed)
     - 192.168.0.50      Jetson Wi‑Fi (router DHCP reservation)
 
