@@ -47,12 +47,12 @@ START_CMDS: Dict[str, str] = {
     "frontcam": (
         "ros2 run v4l2_camera v4l2_camera_node --ros-args "
         "-r __ns:=/front -p video_device:=/dev/frontcam -p image_size:=[640,480] "
-        "-p framerate:=20.0 -p pixel_format:=YUYV -p output_encoding:=yuv422_yuy2"
+        "-p framerate:=20.0 -p pixel_format:=YUYV -p output_encoding:=rgb8"
     ),
     "bottomcam": (
         "ros2 run v4l2_camera v4l2_camera_node --ros-args "
         "-r __ns:=/bottom -p video_device:=/dev/bottomcam -p image_size:=[640,480] "
-        "-p framerate:=20.0 -p pixel_format:=YUYV -p output_encoding:=yuv422_yuy2"
+        "-p framerate:=20.0 -p pixel_format:=YUYV -p output_encoding:=rgb8"
     ),
     "modem": "ros2 run modem_m64 modem_node --ros-args -r __ns:=/auv -p role:=b -p port:=/dev/modem",
     "bar30_ps": "ros2 run arduino_ps arduino_ps",

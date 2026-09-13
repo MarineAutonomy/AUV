@@ -9,12 +9,18 @@
 
 # Auto-connect to Wi-Fi and Set Hostname
 
-Connect to the Wi-Fi network and configure the hostname.
+```bash
+sudo nmcli device wifi list
+sudo nmcli device wifi connect WIFI_NAME password WIFI_PASSWORD
+sudo nmcli connection modify WIFI_NAME connection.autoconnect yes
+sudo hostnamectl set-hostname HOSTNAME
+```
+
+Example for this lab:
 
 ```bash
-nmcli device wifi list
-nmcli device wifi connect mavlab password mavlab24
-nmcli connection modify mavlab connection.autoconnect yes
+sudo nmcli device wifi connect mavlab password mavlab24
+sudo nmcli connection modify mavlab connection.autoconnect yes
 sudo hostnamectl set-hostname timi
 ```
 
@@ -105,27 +111,81 @@ iwconfig wlx8c902d14c273
 
 # Configure Static IP for Ethernet Port of Jetson
 
-Configure a persistent static IP for the Ethernet interface (`enP8p1s0`).
+Persistent static IP on `enP8p1s0` for the vehicle LAN (`192.168.194.0/24`). The Jetson stays `192.168.194.10` so the ground station, DVL, and sonars always find it.
+
+Internet routing (after this block is applied):
+
+| Links up | Internet | Vehicle LAN `192.168.194.x` | SSH |
+|---|---|---|---|
+| Ethernet + Wi-Fi (`mavlab`) | **Wi-Fi** (lower metric) | Ethernet | both (`192.168.194.10` and Wi-Fi IP) |
+| Ethernet only | **Ethernet** via `192.168.194.1` | Ethernet | `192.168.194.10` |
+| Wi-Fi only | **Wi-Fi** | none (no `.10` until Ethernet is back) | Wi-Fi IP |
+
+NetworkManager adds ~20000 to the Wi-Fi default metric, so a Wi-Fi `ipv4.route-metric 50` shows up as **20050** on `default`. Ethernet’s default must be **higher** than that (30000) or Ethernet would steal the internet while both are connected.
 
 ```bash
-sudo nmcli con add type ethernet con-name eth_switch ifname enP8p1s0 ip4 192.168.194.10/24
-sudo nmcli con mod eth_switch connection.autoconnect yes
-sudo nmcli con up eth_switch
+# Create the profile if it does not exist yet
+sudo nmcli connection add type ethernet con-name eth_switch ifname enP8p1s0 \
+  ipv4.method manual \
+  ipv4.addresses 192.168.194.10/24 \
+  ipv4.gateway 192.168.194.1 \
+  ipv4.dns "8.8.8.8 1.1.1.1"
+
+# Ethernet: vehicle LAN + internet fallback (not preferred when Wi-Fi is up)
+sudo nmcli connection modify eth_switch \
+  ipv4.never-default no \
+  ipv4.gateway 192.168.194.1 \
+  ipv4.route-metric 30000 \
+  connection.autoconnect yes
+
+# Wi-Fi: preferred internet + autoconnect (name must be mavlab, not "mavlab 1")
+sudo nmcli connection modify mavlab \
+  ipv4.route-metric 50 \
+  connection.autoconnect yes
+
+sudo nmcli connection up eth_switch
+sudo nmcli connection up mavlab
 ```
 
-Verify the assigned IP address.
+Verify addresses, which path is used, and autoconnect:
 
 ```bash
-ifconfig
+nmcli -f NAME,DEVICE,AUTOCONNECT connection show
+ip -4 addr show enP8p1s0
+ip -4 addr show wlP1p1s0
+ip route
+ip route get 8.8.8.8
+ip route get 192.168.194.1
 ```
-If you are unable to ping the sonar or any other device connected to the Ethernet switch, the Ethernet interface on the Raspberry Pi may not have initialized correctly.
 
-Try reconnecting the enP8p1s0 interface using NetworkManager:
+Expected while **both** are connected:
+
+```text
+NAME        DEVICE    AUTOCONNECT
+mavlab      wlP1p1s0  yes
+eth_switch  enP8p1s0  yes
+
+default via 192.168.1.1   dev wlP1p1s0   metric 20050
+default via 192.168.194.1 dev enP8p1s0   metric 30000
+192.168.194.0/24          dev enP8p1s0   src 192.168.194.10
+192.168.1.0/24            dev wlP1p1s0   src 192.168.1.162
+
+8.8.8.8 via 192.168.1.1 dev wlP1p1s0
+```
+
+`ip route get 8.8.8.8` → `wlP1p1s0` means `docker pull` uses mavlab Wi-Fi.  
+`ip route get 192.168.194.1` → `enP8p1s0` means DVL / sonars / this PC stay on Ethernet.
+
+If Wi-Fi is down, the only default is Ethernet (`metric 30000`) and internet goes via `192.168.194.1`.
+
+If you cannot ping a sonar or other device on the switch, bounce the Ethernet NIC:
+
 ```bash
 sudo nmcli device disconnect enP8p1s0
 sudo nmcli device connect enP8p1s0
 ```
-This forces the Ethernet interface to reinitialize and often restores connectivity to devices on the Ethernet network. After reconnecting, verify communication by pinging the target device again.
+
+Then ping the target again.
 
 # Router Setup for WiFi/LAN Connection for AUV
 
@@ -229,76 +289,32 @@ The router performs **NAT (Network Address Translation)** between the LAN and WA
 
 ## Internet Access on the Jetson
 
-The Jetson can access the Internet through this connection setup.
+The Jetson can use **two** internet paths. Apply the metrics in [Configure Static IP for Ethernet Port of Jetson](#configure-static-ip-for-ethernet-port-of-jetson) so the choice is automatic:
 
-For Internet access to work, the Jetson should have:
+- **Wi-Fi (`mavlab`) up** — default is `192.168.1.1` via `wlP1p1s0` (`docker pull` on lab Wi-Fi).
+- **Wi-Fi down** — default is `192.168.194.1` via `enP8p1s0` (router NAT on the vehicle LAN).
+- **Vehicle devices** always use `192.168.194.0/24` on Ethernet, regardless of which default is active.
 
-- An IP address in the `192.168.194.0/24` subnet
-- `192.168.194.1` configured as the default gateway
-- A valid DNS server
-- A working WAN/Internet connection on the router
-
-The current routing configuration can be checked using:
+Check which path a destination will use:
 
 ```bash
 ip route
+ip route get 8.8.8.8
+ip route get 192.168.194.95
 ```
 
-The routing table should contain a default route similar to:
-
-```text
-default via 192.168.194.1 dev <ethernet-interface>
-```
-
-If the default route is missing, configure the gateway and DNS settings for the Ethernet connection using:
+Test internet:
 
 ```bash
-sudo nmcli connection modify eth_switch \
-  ipv4.gateway 192.168.194.1 \
-  ipv4.never-default no \
-  ipv4.dns "8.8.8.8 1.1.1.1" \
-  ipv4.ignore-auto-dns no
-```
-After modifying the connection, restart it for the changes to take effect:
-
-```bash
-sudo nmcli connection down eth_switch
-sudo nmcli connection up eth_switch
+ping -c 2 8.8.8.8
+ping -c 2 google.com
 ```
 
-Verify the routing table again:
+If `8.8.8.8` works but `google.com` does not, check DNS (`resolvectl status`).
 
-```bash
-ip route
-```
+If Ethernet is the only link and `192.168.194.1` pings but `8.8.8.8` does not, check the router WAN, NAT, and upstream network.
 
-You should now see a default route similar to:
-
-```text
-default via 192.168.194.1 dev <ethernet-interface>
-```
-
-You can also verify the configured DNS servers using:
-
-```bash
-resolvectl status
-```
-
-Once the default route is configured, test Internet connectivity:
-
-```bash
-ping 8.8.8.8
-```
-
-Then verify DNS resolution:
-
-```bash
-ping google.com
-```
-
-If `8.8.8.8` works but `google.com` does not, check the DNS configuration.
-
-If `192.168.194.1` is reachable but `8.8.8.8` is not, check the router's WAN connection, NAT configuration, and upstream network connectivity.
+Do **not** set `ipv4.never-default yes` on `eth_switch` if you want Ethernet to provide internet when Wi-Fi is disconnected. That flag removes the Ethernet default permanently.
 
 # SonarView AppImage Dependencies
 
