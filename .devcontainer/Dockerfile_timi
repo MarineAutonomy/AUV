@@ -27,7 +27,7 @@ RUN apt-get update && apt-get install -y software-properties-common \
  && apt-add-repository -y universe && apt-get update \
  && apt-get install -y --no-install-recommends \
       python3-pip python3-serial python3-opencv \
-      sudo xauth htop udev zip unzip git \
+      sudo xauth htop udev zip unzip git iputils-ping \
       libboost-all-dev libasio-dev \
       v4l-utils \
       libsm6 libxext6 libxrender1 libfontconfig1 libgl1 \

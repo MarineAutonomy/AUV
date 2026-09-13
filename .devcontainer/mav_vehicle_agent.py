@@ -368,20 +368,37 @@ ETHERNET_DEVICES = [
 ]
 
 
-def _ping_host(host: str, timeout_s: float = 0.8) -> bool:
-    """ICMP reachability from the vehicle (host network)."""
-    try:
-        # -c 1 one probe; -W timeout seconds (iputils on Ubuntu).
-        r = subprocess.run(
-            ["ping", "-c", "1", "-W", str(max(1, int(timeout_s))), host],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=timeout_s + 0.5,
-            check=False,
-        )
-        return r.returncode == 0
-    except Exception:
-        return False
+def _ping_host(host: str, timeout_s: float = 1.5) -> bool:
+    """ICMP reachability from the vehicle.
+
+    The agent image has no `ping` — enter the host mount+net namespaces to use
+    /usr/bin/ping (same trick as USB listing).
+    """
+    wait = str(max(1, int(timeout_s)))
+    ping_args = ["-c", "1", "-W", wait, host]
+    attempts: List[List[str]] = [
+        ["ping", *ping_args],
+        ["/usr/bin/ping", *ping_args],
+    ]
+    nsenter = "/usr/bin/nsenter" if os.path.exists("/usr/bin/nsenter") else "/nsenter"
+    if os.path.exists(nsenter):
+        host_ping = [nsenter, "-t", "1", "-m", "-n", "--", "/usr/bin/ping", *ping_args]
+        attempts.append(["sudo", "-n", *host_ping])
+        attempts.append(host_ping)
+    for cmd in attempts:
+        try:
+            r = subprocess.run(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=timeout_s + 1.0,
+                check=False,
+            )
+            if r.returncode == 0:
+                return True
+        except Exception:
+            continue
+    return False
 
 
 def ethernet_devices() -> List[dict]:
