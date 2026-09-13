@@ -23,7 +23,7 @@ SUBSYSTEM=="tty", ATTRS{serial}=="DK0GXSZA", SYMLINK+="ping360", GROUP="dialout"
 SUBSYSTEM=="tty", ATTRS{idVendor}=="2341", ATTRS{idProduct}=="025b", ATTRS{serial}=="Arduino", SYMLINK+="portenta", MODE="0666"
 
 # Logitech C270 HD Webcam
-SUBSYSTEM=="video4linux", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="0825", ATTRS{serial}=="7DE94F40", ATTR{index}=="0", SYMLINK+="bottomcam"
+SUBSYSTEM=="video4linux", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="0825", ATTRS{serial}=="D6784950", ATTR{index}=="0", SYMLINK+="bottomcam"
 
 # Lenovo FHD Webcam
 SUBSYSTEM=="video4linux", ATTRS{idVendor}=="17ef", ATTRS{idProduct}=="4831", ATTRS{serial}=="SN0001", ATTR{index}=="0", SYMLINK+="frontcam"
