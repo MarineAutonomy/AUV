@@ -59,6 +59,98 @@ START_CMDS: Dict[str, str] = {
     "sidescan": "ros2 launch sidescan_ros2 sidescan.launch.py",
 }
 
+
+def _clamp_int(v: object, default: int, lo: int, hi: int) -> int:
+    try:
+        n = int(v)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, n))
+
+
+def _clamp_float(v: object, default: float, lo: float, hi: float) -> float:
+    try:
+        n = float(v)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, n))
+
+
+def ping360_start_cmd(params: Optional[dict] = None) -> str:
+    p = params or {}
+    sector = _clamp_int(p.get("angle_sector"), 360, 60, 360)
+    step = _clamp_int(p.get("angle_step"), 1, 1, 20)
+    range_max = _clamp_int(p.get("range_max"), 2, 1, 50)
+    return (
+        "ros2 run ping360_sonar ping360.py --ros-args "
+        f"-p device:=/dev/ping360 -p angle_sector:={sector} "
+        f"-p angle_step:={step} -p range_max:={range_max}"
+    )
+
+
+def ping2_start_cmd(params: Optional[dict] = None) -> str:
+    p = params or {}
+    speed = _clamp_int(p.get("speed"), 1450000, 1400000, 1600000)
+    gain_num = _clamp_int(p.get("gain_num"), 1, 0, 6)
+    scan_start = _clamp_int(p.get("scan_start"), 100, 30, 200)
+    # Package param is misspelled `scan_lenght`; accept GUI `scan_length` too.
+    scan_length = _clamp_int(
+        p.get("scan_length", p.get("scan_lenght")), 3000, 2000, 10000
+    )
+    return (
+        "ros2 run ping_sonar_ros ping1d_node --ros-args "
+        f"-p port:=/dev/ping2 -p speed:={speed} -p gain_num:={gain_num} "
+        f"-p scan_start:={scan_start} -p scan_lenght:={scan_length}"
+    )
+
+
+def cam_start_cmd(sensor_id: str, params: Optional[dict] = None) -> str:
+    p = params or {}
+    width = 640
+    height = 480
+    size = p.get("image_size")
+    if isinstance(size, (list, tuple)) and len(size) >= 2:
+        width = _clamp_int(size[0], 640, 160, 1920)
+        height = _clamp_int(size[1], 480, 120, 1080)
+    elif isinstance(size, str) and "x" in size.lower():
+        parts = size.lower().split("x", 1)
+        width = _clamp_int(parts[0].strip(), 640, 160, 1920)
+        height = _clamp_int(parts[1].strip(), 480, 120, 1080)
+    else:
+        width = _clamp_int(p.get("image_width"), 640, 160, 1920)
+        height = _clamp_int(p.get("image_height"), 480, 120, 1080)
+    framerate = _clamp_float(p.get("framerate"), 20.0, 1.0, 60.0)
+    ns = "/front" if sensor_id == "frontcam" else "/bottom"
+    dev = "/dev/frontcam" if sensor_id == "frontcam" else "/dev/bottomcam"
+    return (
+        "ros2 run v4l2_camera v4l2_camera_node --ros-args "
+        f"-r __ns:={ns} -p video_device:={dev} -p image_size:=[{width},{height}] "
+        f"-p framerate:={framerate} -p pixel_format:=YUYV -p output_encoding:=rgb8"
+    )
+
+
+def sidescan_start_cmd(params: Optional[dict] = None) -> str:
+    """Start SS450 via ros2 run so params work without rebuilding launch share."""
+    p = params or {}
+    speed = _clamp_int(p.get("speed_of_sound_mm"), 1482000, 1482000, 1500000)
+    start_mm = _clamp_int(p.get("start_mm"), 0, 0, 5000)
+    length_mm = _clamp_int(p.get("length_mm"), 5000, 0, 300000)
+    msec = _clamp_int(p.get("msec_per_ping"), 0, 0, 10)
+    pulse = _clamp_float(p.get("pulse_len_percent"), 0.002, 0.002, 0.004)
+    filt = _clamp_float(p.get("filter_duration_percent"), 0.0015, 0.0015, 0.0016)
+    gain = _clamp_int(p.get("gain_index"), -1, -1, 7)
+    num_results = _clamp_int(p.get("num_results"), 600, 200, 1200)
+    return (
+        "ros2 run sidescan_ros2 sidescan_node --ros-args "
+        "-p sensor_number:=450 "
+        "-p port_ip_address:=192.168.194.92 -p port_port:=51200 "
+        "-p starboard_ip_address:=192.168.194.93 -p starboard_port:=51200 "
+        f"-p speed_of_sound_mm:={speed} -p start_mm:={start_mm} "
+        f"-p length_mm:={length_mm} -p msec_per_ping:={msec} "
+        f"-p pulse_len_percent:={pulse} -p filter_duration_percent:={filt} "
+        f"-p gain_index:={gain} -p num_results:={num_results}"
+    )
+
 STOP_PATTERNS: Dict[str, str] = {
     "dvl": "dvl",
     "sbg": "sbg",
@@ -169,7 +261,7 @@ def sensor_device_ready(sensor_id: str) -> bool:
     return any(os.path.exists(f"/dev/{n}") for n in names)
 
 
-def start_sensor(sensor_id: str) -> None:
+def start_sensor(sensor_id: str, params: Optional[dict] = None) -> None:
     if running(sensor_id):
         # Idempotent: never spawn a second process (cams used to double-start when
         # status briefly showed red / Activate All raced with On).
@@ -184,7 +276,16 @@ def start_sensor(sensor_id: str) -> None:
         names = SENSOR_DEV_SYMLINKS.get(sensor_id) or []
         need = ", ".join(f"/dev/{n}" for n in names)
         raise RuntimeError(f"{sensor_id}: device symlink not active ({need})")
-    cmd = START_CMDS[sensor_id]
+    if sensor_id == "ping360":
+        cmd = ping360_start_cmd(params)
+    elif sensor_id == "ping2":
+        cmd = ping2_start_cmd(params)
+    elif sensor_id in ("frontcam", "bottomcam"):
+        cmd = cam_start_cmd(sensor_id, params)
+    elif sensor_id == "sidescan":
+        cmd = sidescan_start_cmd(params)
+    else:
+        cmd = START_CMDS[sensor_id]
 
     def _spawn() -> None:
         # Brief settle for USB cams without embedding `sleep` in the process cmdline
@@ -622,9 +723,19 @@ class Handler(BaseHTTPRequestHandler):
             if sid not in START_CMDS:
                 self._json(400, {"error": "unknown sensor id"})
                 return
+            body: dict = {}
+            if action == "start":
+                length = int(self.headers.get("Content-Length", "0") or "0")
+                raw = self.rfile.read(length) if length > 0 else b"{}"
+                try:
+                    parsed = json.loads(raw.decode("utf-8") or "{}")
+                    if isinstance(parsed, dict):
+                        body = parsed
+                except Exception:
+                    body = {}
             try:
                 if action == "start":
-                    start_sensor(sid)
+                    start_sensor(sid, body)
                 else:
                     stop_sensor(sid)
                 self._json(200, {"ok": True, "code": 0, "id": sid, "action": action, "via": "agent"})

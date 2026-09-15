@@ -28,6 +28,10 @@ Servo thrustersbfr, thrustersbms1, thrustersbms2, thrustersbaf;
 Servo thrusterpsfr, thrusterpsms1, thrusterpsms2, thrusterpsaf;
 Servo lightfl, lightbl;
 
+// Lumen PWM (μs): 1100 = off, 1900 = full. Set via serial "L,<fl>,<bl>\n"
+int lightFlUs = 1100;
+int lightBlUs = 1100;
+
 // Timing / state
 bool first_count = true;
 float start_millis, seconds_counter, current_millis;
@@ -49,6 +53,17 @@ int readChannel(byte channelInput, int minLimit, int maxLimit, int defaultValue)
   return map(ch, 1000, 2000, minLimit, maxLimit);
 }
 
+int clampLightUs(int us) {
+  if (us < 1100) return 1100;
+  if (us > 1900) return 1900;
+  return us;
+}
+
+void applyLights() {
+  lightfl.writeMicroseconds(lightFlUs);
+  lightbl.writeMicroseconds(lightBlUs);
+}
+
 void stopAllThrusters() {
   thrusterpsfr.writeMicroseconds(1500);
   thrusterpsaf.writeMicroseconds(1500);
@@ -58,8 +73,9 @@ void stopAllThrusters() {
   thrustersbms1.writeMicroseconds(1500);
   thrusterpsms2.writeMicroseconds(1500);
   thrustersbms2.writeMicroseconds(1500);
-  lightfl.writeMicroseconds(1100);
-  lightbl.writeMicroseconds(1100);
+  lightFlUs = 1100;
+  lightBlUs = 1100;
+  applyLights();
 }
 // ──────────────────────────────────────────────────────────────
 
@@ -85,7 +101,8 @@ void RF_MAN(int CH1, int CH2, int CH3, int CH4) {
   }
 }
 
-void processMessage(char* message) {
+// Thruster line: "t0,t1,t2,t3,t4,t5,t6,t7\n" (unchanged)
+void processThrusterMessage(char* message) {
   String input = String(message);
   int values[8];
   int startIndex = 0, commaIndex = 0;
@@ -104,8 +121,32 @@ void processMessage(char* message) {
   thrustersbms1.writeMicroseconds(values[5]);
   thrusterpsms2.writeMicroseconds(values[6]);
   thrustersbms2.writeMicroseconds(values[7]);
-  lightfl.writeMicroseconds(1900);
-  lightbl.writeMicroseconds(1900);
+}
+
+// Light line from arduino_ps /auv/light_cmd: "L,<fl_us>,<bl_us>\n"
+// [0]=lightfl (pin 5 / light1), [1]=lightbl (pin 4 / light2)
+void processLightMessage(char* message) {
+  if (message[0] != 'L' || message[1] != ',') return;
+
+  String input = String(message);
+  int startIndex = 2; // skip "L,"
+  int commaIndex = input.indexOf(',', startIndex);
+  if (commaIndex < 0) return;
+
+  int fl = input.substring(startIndex, commaIndex).toInt();
+  int bl = input.substring(commaIndex + 1).toInt();
+
+  lightFlUs = clampLightUs(fl);
+  lightBlUs = clampLightUs(bl);
+  applyLights();
+}
+
+void processMessage(char* message) {
+  if (message[0] == 'L') {
+    processLightMessage(message);
+  } else {
+    processThrusterMessage(message);
+  }
 }
 
 void Auto() {
@@ -118,7 +159,7 @@ void Auto() {
     
     if (incomingChar == '\n') {
       buffer[bufferIndex] = '\0'; // Null-terminate
-      processMessage(buffer);     // Parse the data
+      processMessage(buffer);     // Thrusters CSV or L,<fl>,<bl>
       bufferIndex = 0;            // Reset index
     } else if (incomingChar >= ' ') { // Only store printable characters
       if (bufferIndex < BUFFER_SIZE - 1) {
@@ -219,9 +260,7 @@ void loop() {
     delay(500);           // brief pause so ESCs register neutral
     }
     if (millis() - auto_start_time <= AUTO_TIMEOUT) {
-      Auto();
-      lightfl.writeMicroseconds(1900);
-      lightbl.writeMicroseconds(1900);
+      Auto();  // thruster CSV and/or L,<fl>,<bl> light commands
     } else {
       stopAllThrusters();
     }

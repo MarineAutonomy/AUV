@@ -6,7 +6,13 @@ ROS2 node that bridges Arduino serial communication:
 
   SUBSCRIBES:
     /auv/thruster_cmd  [std_msgs/Int32MultiArray]
-        → 8 PWM values [t1,t2,t3,t4,t5,t6,t7,t8] (1100–1900, 1500=neutral)
+        → 8 PWM values [t1..t8] (1100–1900, 1500=neutral)
+        → serial: "v0,v1,v2,v3,v4,v5,v6,v7\\n"
+
+    /auv/light_cmd     [std_msgs/Int32MultiArray]
+        → 2 PWM values [lightfl, lightbl] (1100–1900, 1100=off, 1900=full)
+        → serial: "L,<fl>,<bl>\\n"
+          lightfl = pin 5 (light1), lightbl = pin 4 (light2)
 
   PUBLISHES:
     /auv/pressure      [std_msgs/Float32]   — mbar
@@ -15,12 +21,16 @@ ROS2 node that bridges Arduino serial communication:
     /auv/sensor_raw    [std_msgs/String]    — raw CSV line for debug
 
 Usage:
-  ros2 run arduino_ps arduino_ps --ros-args \
+  ros2 run arduino_ps arduino_ps --ros-args \\
       -p port:=/dev/arduino_mega -p baud:=115200
 
 Publish thruster command from terminal (example):
-  ros2 topic pub /auv/thruster_cmd std_msgs/Int32MultiArray \
+  ros2 topic pub /auv/thruster_cmd std_msgs/Int32MultiArray \\
       "{data: [1500,1500,1500,1500,1500,1500,1500,1500]}"
+
+Publish light brightness (example — both half):
+  ros2 topic pub /auv/light_cmd std_msgs/Int32MultiArray \\
+      "{data: [1500,1500]}"
 """
 
 import rclpy
@@ -54,19 +64,29 @@ class AUVBridge(Node):
         self.pub_raw         = self.create_publisher(String,          '/auv/sensor_raw',   10)
         # ──────────────────────────────────────────────────────
 
-        # ── Subscriber ────────────────────────────────────────
-        # Expects Int32MultiArray with 8 PWM values
+        # ── Subscribers ───────────────────────────────────────
         self.sub_thruster = self.create_subscription(
             Int32MultiArray,
             '/auv/thruster_cmd',
             self.thruster_callback,
             10
         )
+        self.sub_light = self.create_subscription(
+            Int32MultiArray,
+            '/auv/light_cmd',
+            self.light_callback,
+            10
+        )
         # ──────────────────────────────────────────────────────
 
-        # ── Thruster command state (default neutral) ──────────
+        # ── Command state ─────────────────────────────────────
         self.thruster_values = [1500] * 8
         self.thruster_lock   = threading.Lock()
+
+        # Lumen lights: [lightfl, lightbl] — off until commanded
+        self.light_values = [1100, 1100]
+        self.light_lock   = threading.Lock()
+        self.light_dirty  = True   # send once after boot
         # ──────────────────────────────────────────────────────
 
         # ── Serial port ───────────────────────────────────────
@@ -88,12 +108,12 @@ class AUVBridge(Node):
         self.reader_thread.start()
         # ──────────────────────────────────────────────────────
 
-        # ── Timer: send thruster commands at send_period Hz ───
-        self.create_timer(send_period, self._send_thrusters)
+        # ── Timer: thrusters every period; lights when dirty ──
+        self.create_timer(send_period, self._send_commands)
         # ──────────────────────────────────────────────────────
 
         self.get_logger().info('AUV Bridge node started.')
-        self.get_logger().info('Subscribe to /auv/thruster_cmd to control thrusters.')
+        self.get_logger().info('Subscribe to /auv/thruster_cmd (8 PWM) and /auv/light_cmd (2 PWM).')
         self.get_logger().info('Sensor data on /auv/pressure, /auv/temperature, /auv/depth')
 
     # ── Thruster subscriber callback ──────────────────────────
@@ -105,7 +125,6 @@ class AUVBridge(Node):
             )
             return
 
-        # Clamp each value to safe range 1100–1900
         clamped = [max(1100, min(1900, int(v))) for v in msg.data]
 
         with self.thruster_lock:
@@ -113,17 +132,55 @@ class AUVBridge(Node):
 
         self.get_logger().debug(f'Thruster cmd received: {clamped}')
 
-    # ── Timer callback: send thruster command over serial ─────
-    def _send_thrusters(self):
-        with self.thruster_lock:
-            values = list(self.thruster_values)
+    # ── Light subscriber callback ─────────────────────────────
+    def light_callback(self, msg: Int32MultiArray):
+        """Receives 2 Lumen PWM values [lightfl, lightbl] (1100–1900)."""
+        if len(msg.data) != 2:
+            self.get_logger().warn(
+                f'Expected 2 light values [fl, bl], got {len(msg.data)} — ignoring'
+            )
+            return
 
-        line = ",".join(str(v) for v in values) + "\n"
+        clamped = [max(1100, min(1900, int(v))) for v in msg.data]
+
+        with self.light_lock:
+            self.light_values = clamped
+            self.light_dirty = True
+
+        self.get_logger().debug(f'Light cmd received: fl={clamped[0]} bl={clamped[1]}')
+
+    # ── Timer: thrusters always; lights when changed ──────────
+    def _send_commands(self):
+        with self.thruster_lock:
+            thrusters = list(self.thruster_values)
+
+        thruster_line = ",".join(str(v) for v in thrusters) + "\n"
         try:
-            self.ser.write(line.encode("ascii"))
+            self.ser.write(thruster_line.encode("ascii"))
+        except serial.SerialException as e:
+            self.get_logger().error(f'Serial write error (thrusters): {e}')
+            return
+
+        light_line = None
+        with self.light_lock:
+            if self.light_dirty:
+                fl, bl = self.light_values
+                light_line = f"L,{fl},{bl}\n"
+                self.light_dirty = False
+
+        if light_line is not None:
+            try:
+                self.ser.write(light_line.encode("ascii"))
+            except serial.SerialException as e:
+                self.get_logger().error(f'Serial write error (lights): {e}')
+                with self.light_lock:
+                    self.light_dirty = True
+                return
+
+        try:
             self.ser.flush()
         except serial.SerialException as e:
-            self.get_logger().error(f'Serial write error: {e}')
+            self.get_logger().error(f'Serial flush error: {e}')
 
     # ── Background reader: parse sensor data from Arduino ─────
     def _serial_reader(self):
@@ -181,11 +238,11 @@ class AUVBridge(Node):
 
     # ── Cleanup ───────────────────────────────────────────────
     def destroy_node(self):
-        self.get_logger().info('Shutting down — sending neutral to thrusters...')
+        self.get_logger().info('Shutting down — neutral thrusters + lights off...')
         self.stop_flag.set()
         try:
-            neutral = "1500,1500,1500,1500,1500,1500,1500,1500\n"
-            self.ser.write(neutral.encode("ascii"))
+            self.ser.write(b"1500,1500,1500,1500,1500,1500,1500,1500\n")
+            self.ser.write(b"L,1100,1100\n")
             self.ser.flush()
             time.sleep(0.2)
             self.ser.close()
