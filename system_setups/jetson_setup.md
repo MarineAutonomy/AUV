@@ -7,7 +7,11 @@
 
 ---
 
-# Auto-connect to Wi-Fi and Set Hostname
+# Wi-Fi + Ethernet
+
+Wi-Fi for internet. Ethernet static IP `192.168.194.10` for the vehicle LAN (ground station, DVL, sonars).
+
+## Auto-connect to Wi-Fi and Set Hostname
 
 ```bash
 sudo nmcli device wifi list
@@ -23,6 +27,82 @@ sudo nmcli device wifi connect mavlab password mavlab24
 sudo nmcli connection modify mavlab connection.autoconnect yes
 sudo hostnamectl set-hostname timi
 ```
+
+## Static IP on Ethernet
+
+Persistent static IP on `enP8p1s0` (`192.168.194.0/24`).
+
+| Links up | Internet | Vehicle LAN `192.168.194.x` | SSH |
+|---|---|---|---|
+| Ethernet + Wi-Fi (`mavlab`) | **Wi-Fi** (lower metric) | Ethernet | both (`192.168.194.10` and Wi-Fi IP) |
+| Ethernet only | **Ethernet** via `192.168.194.1` | Ethernet | `192.168.194.10` |
+| Wi-Fi only | **Wi-Fi** | none (no `.10` until Ethernet is back) | Wi-Fi IP |
+
+NetworkManager adds ~20000 to the Wi-Fi default metric, so a Wi-Fi `ipv4.route-metric 50` shows up as **20050** on `default`. Ethernet’s default must be **higher** than that (30000) or Ethernet would steal the internet while both are connected.
+
+```bash
+# Create the profile if it does not exist yet
+sudo nmcli connection add type ethernet con-name eth_switch ifname enP8p1s0 \
+  ipv4.method manual \
+  ipv4.addresses 192.168.194.10/24 \
+  ipv4.gateway 192.168.194.1 \
+  ipv4.dns "8.8.8.8 1.1.1.1"
+
+# Ethernet: vehicle LAN + internet fallback (not preferred when Wi-Fi is up)
+sudo nmcli connection modify eth_switch \
+  ipv4.never-default no \
+  ipv4.gateway 192.168.194.1 \
+  ipv4.route-metric 30000 \
+  connection.autoconnect yes
+
+# Wi-Fi: preferred internet + autoconnect (name must be mavlab, not "mavlab 1")
+sudo nmcli connection modify mavlab \
+  ipv4.route-metric 50 \
+  connection.autoconnect yes
+
+sudo nmcli connection up eth_switch
+sudo nmcli connection up mavlab
+```
+
+Verify addresses, which path is used, and autoconnect:
+
+```bash
+nmcli -f NAME,DEVICE,AUTOCONNECT connection show
+ip -4 addr show enP8p1s0
+ip -4 addr show wlP1p1s0
+ip route
+ip route get 8.8.8.8
+ip route get 192.168.194.1
+```
+
+Expected while **both** are connected:
+
+```text
+NAME        DEVICE    AUTOCONNECT
+mavlab      wlP1p1s0  yes
+eth_switch  enP8p1s0  yes
+
+default via 192.168.1.1   dev wlP1p1s0   metric 20050
+default via 192.168.194.1 dev enP8p1s0   metric 30000
+192.168.194.0/24          dev enP8p1s0   src 192.168.194.10
+192.168.1.0/24            dev wlP1p1s0   src 192.168.1.162
+
+8.8.8.8 via 192.168.1.1 dev wlP1p1s0
+```
+
+`ip route get 8.8.8.8` → `wlP1p1s0` means internet uses mavlab Wi-Fi.  
+`ip route get 192.168.194.1` → `enP8p1s0` means DVL / sonars / this PC stay on Ethernet.
+
+If Wi-Fi is down, the only default is Ethernet (`metric 30000`) and internet goes via `192.168.194.1`.
+
+If you cannot ping a sonar or other device on the switch, bounce the Ethernet NIC:
+
+```bash
+sudo nmcli device disconnect enP8p1s0
+sudo nmcli device connect enP8p1s0
+```
+
+Then ping the target again.
 
 ---
 
@@ -108,84 +188,6 @@ iwconfig wlx8c902d14c273
 ```
 
 ---
-
-# Configure Static IP for Ethernet Port of Jetson
-
-Persistent static IP on `enP8p1s0` for the vehicle LAN (`192.168.194.0/24`). The Jetson stays `192.168.194.10` so the ground station, DVL, and sonars always find it.
-
-Internet routing (after this block is applied):
-
-| Links up | Internet | Vehicle LAN `192.168.194.x` | SSH |
-|---|---|---|---|
-| Ethernet + Wi-Fi (`mavlab`) | **Wi-Fi** (lower metric) | Ethernet | both (`192.168.194.10` and Wi-Fi IP) |
-| Ethernet only | **Ethernet** via `192.168.194.1` | Ethernet | `192.168.194.10` |
-| Wi-Fi only | **Wi-Fi** | none (no `.10` until Ethernet is back) | Wi-Fi IP |
-
-NetworkManager adds ~20000 to the Wi-Fi default metric, so a Wi-Fi `ipv4.route-metric 50` shows up as **20050** on `default`. Ethernet’s default must be **higher** than that (30000) or Ethernet would steal the internet while both are connected.
-
-```bash
-# Create the profile if it does not exist yet
-sudo nmcli connection add type ethernet con-name eth_switch ifname enP8p1s0 \
-  ipv4.method manual \
-  ipv4.addresses 192.168.194.10/24 \
-  ipv4.gateway 192.168.194.1 \
-  ipv4.dns "8.8.8.8 1.1.1.1"
-
-# Ethernet: vehicle LAN + internet fallback (not preferred when Wi-Fi is up)
-sudo nmcli connection modify eth_switch \
-  ipv4.never-default no \
-  ipv4.gateway 192.168.194.1 \
-  ipv4.route-metric 30000 \
-  connection.autoconnect yes
-
-# Wi-Fi: preferred internet + autoconnect (name must be mavlab, not "mavlab 1")
-sudo nmcli connection modify mavlab \
-  ipv4.route-metric 50 \
-  connection.autoconnect yes
-
-sudo nmcli connection up eth_switch
-sudo nmcli connection up mavlab
-```
-
-Verify addresses, which path is used, and autoconnect:
-
-```bash
-nmcli -f NAME,DEVICE,AUTOCONNECT connection show
-ip -4 addr show enP8p1s0
-ip -4 addr show wlP1p1s0
-ip route
-ip route get 8.8.8.8
-ip route get 192.168.194.1
-```
-
-Expected while **both** are connected:
-
-```text
-NAME        DEVICE    AUTOCONNECT
-mavlab      wlP1p1s0  yes
-eth_switch  enP8p1s0  yes
-
-default via 192.168.1.1   dev wlP1p1s0   metric 20050
-default via 192.168.194.1 dev enP8p1s0   metric 30000
-192.168.194.0/24          dev enP8p1s0   src 192.168.194.10
-192.168.1.0/24            dev wlP1p1s0   src 192.168.1.162
-
-8.8.8.8 via 192.168.1.1 dev wlP1p1s0
-```
-
-`ip route get 8.8.8.8` → `wlP1p1s0` means `docker pull` uses mavlab Wi-Fi.  
-`ip route get 192.168.194.1` → `enP8p1s0` means DVL / sonars / this PC stay on Ethernet.
-
-If Wi-Fi is down, the only default is Ethernet (`metric 30000`) and internet goes via `192.168.194.1`.
-
-If you cannot ping a sonar or other device on the switch, bounce the Ethernet NIC:
-
-```bash
-sudo nmcli device disconnect enP8p1s0
-sudo nmcli device connect enP8p1s0
-```
-
-Then ping the target again.
 
 # Router Setup for WiFi/LAN Connection for AUV
 

@@ -83,10 +83,10 @@ Bring up any **sensors declared in your vessel YAML** (e.g. SBG IMU, DVL) so `na
 
 **1. Arduino bridge — `arduino_ps`**
 
-Publishes `/auv/depth`, pressure, temperature, and forwards `/auv/thruster_cmd` to the MCU. Default serial is `/dev/arduino` @ `115200`; override if your device differs.
+Publishes `/auv/depth`, pressure, temperature, and forwards `/auv/thruster_cmd` to the MCU. Default serial is `/dev/arduino_mega` @ `115200`; override if your device differs.
 
 ```bash
-ros2 run arduino_ps arduino_ps --ros-args -p port:=/dev/arduino -p baud:=115200
+ros2 run arduino_ps arduino_ps --ros-args -p port:=/dev/arduino_mega -p baud:=115200
 ```
 
 **2. Navigation — EKF**

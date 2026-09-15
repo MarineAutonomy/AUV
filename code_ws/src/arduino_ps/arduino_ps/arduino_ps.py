@@ -15,8 +15,8 @@ ROS2 node that bridges Arduino serial communication:
     /auv/sensor_raw    [std_msgs/String]    — raw CSV line for debug
 
 Usage:
-  ros2 run rov_sensors auv_bridge --ros-args \
-      -p port:=/dev/arduino -p baud:=115200
+  ros2 run arduino_ps arduino_ps --ros-args \
+      -p port:=/dev/arduino_mega -p baud:=115200
 
 Publish thruster command from terminal (example):
   ros2 topic pub /auv/thruster_cmd std_msgs/Int32MultiArray \
@@ -38,7 +38,7 @@ class AUVBridge(Node):
         super().__init__('auv_bridge')
 
         # ── Parameters ────────────────────────────────────────
-        self.declare_parameter('port', '/dev/arduino')
+        self.declare_parameter('port', '/dev/arduino_mega')
         self.declare_parameter('baud', 115200)
         self.declare_parameter('send_period', 0.1)   # 10 Hz
 

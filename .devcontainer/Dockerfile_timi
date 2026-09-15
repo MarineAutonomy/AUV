@@ -159,7 +159,7 @@ RUN echo "alias sbg='ros2 launch sbg_driver sbg_device_launch.py'" >> /home/${US
  && echo "alias bottomcam='sleep 2 && ros2 run v4l2_camera v4l2_camera_node --ros-args -r __ns:=/bottom -p video_device:=/dev/bottomcam -p image_size:=[800,600] -p framerate:=20.0 -p pixel_format:=YUYV -p output_encoding:=rgb8'" >> /home/${USERNAME}/.bashrc \
  && echo "alias webvid='ros2 run web_video_server web_video_server --ros-args -p port:=8080'" >> /home/${USERNAME}/.bashrc \
  && echo "alias modem='ros2 run modem_m64 modem_node --ros-args -r __ns:=/auv -p role:=b -p port:=/dev/modem'" >> /home/${USERNAME}/.bashrc \
- && echo "alias bar30='ros2 run arduino_ps arduino_ps'" >> /home/${USERNAME}/.bashrc \
+ && echo "alias bar30='ros2 run arduino_ps arduino_ps --ros-args -p port:=/dev/arduino_mega'" >> /home/${USERNAME}/.bashrc \
  && echo "alias dvl_calibrate='ros2 topic pub --once /dvl/config/command dvl_msgs/msg/ConfigCommand \"{command: calibrate_gyro}\"'" >> /home/${USERNAME}/.bashrc \
  && echo "alias dvl_reset='ros2 topic pub --once /dvl/config/command dvl_msgs/msg/ConfigCommand \"{command: reset_dead_reckoning}\"'" >> /home/${USERNAME}/.bashrc \
  && echo "alias sidescan='ros2 launch sidescan_ros2 sidescan.launch.py'" >> /home/${USERNAME}/.bashrc

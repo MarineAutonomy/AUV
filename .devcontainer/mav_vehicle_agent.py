@@ -55,7 +55,7 @@ START_CMDS: Dict[str, str] = {
         "-p framerate:=20.0 -p pixel_format:=YUYV -p output_encoding:=rgb8"
     ),
     "modem": "ros2 run modem_m64 modem_node --ros-args -r __ns:=/auv -p role:=b -p port:=/dev/modem",
-    "bar30_ps": "ros2 run arduino_ps arduino_ps",
+    "bar30_ps": "ros2 run arduino_ps arduino_ps --ros-args -p port:=/dev/arduino_mega",
     "sidescan": "ros2 launch sidescan_ros2 sidescan.launch.py",
 }
 
@@ -363,6 +363,13 @@ ETHERNET_DEVICES = [
         "label": "DVL",
         "endpoints": [
             {"name": "dvl", "host": "192.168.194.95"},
+        ],
+    },
+    {
+        "id": "fs450",
+        "label": "FS450",
+        "endpoints": [
+            {"name": "fs450", "host": "192.168.194.90"},
         ],
     },
 ]
