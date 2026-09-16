@@ -2,12 +2,11 @@
 
 ROS2 Humble driver for the Cerulean Omniscan 450 **FS** (forward-scan) sonar.
 
-Uses the same Cerulean Ping Protocol and `Omniscan450` API as the side-scan variant (`os_mono_profile` over TCP port 51200).
+Uses the same Cerulean Ping Protocol and `Omniscan450` API (`os_mono_profile` over TCP port 51200).
 
 ## Build
 
 ```bash
-cd /path/to/SIDESCAN_ROS2
 colcon build --packages-select frontscan_ros2
 source install/setup.bash
 ```
