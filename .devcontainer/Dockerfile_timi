@@ -88,7 +88,6 @@ ENV ARDUINO_DATA="/home/${USERNAME}/.arduino15"
 RUN arduino-cli config init \
  && arduino-cli config set directories.data "${ARDUINO_DATA}" \
  && arduino-cli core update-index \
- && arduino-cli core install arduino:avr \
  && arduino-cli core install arduino:mbed_portenta \
  && arduino-cli core install arduino:renesas_uno \
  && arduino-cli lib install Servo \
@@ -163,6 +162,7 @@ RUN echo "alias sbg='ros2 launch sbg_driver sbg_device_launch.py'" >> /home/${US
  && echo "alias bar30='ros2 run arduino_ps arduino_ps --ros-args -p port:=/dev/arduino_mega'" >> /home/${USERNAME}/.bashrc \
  && echo "alias dvl_calibrate='ros2 topic pub --once /dvl/config/command dvl_msgs/msg/ConfigCommand \"{command: calibrate_gyro}\"'" >> /home/${USERNAME}/.bashrc \
  && echo "alias dvl_reset='ros2 topic pub --once /dvl/config/command dvl_msgs/msg/ConfigCommand \"{command: reset_dead_reckoning}\"'" >> /home/${USERNAME}/.bashrc \
- && echo "alias sidescan='ros2 launch sidescan_ros2 sidescan.launch.py'" >> /home/${USERNAME}/.bashrc
+ && echo "alias sidescan='ros2 launch sidescan_ros2 sidescan.launch.py'" >> /home/${USERNAME}/.bashrc \
+ && echo "alias frontscan='ros2 launch frontscan_ros2 frontscan.launch.py'" >> /home/${USERNAME}/.bashrc
 # -------------------- Expose Ports --------------------
 EXPOSE 9000 9001 9002 9003

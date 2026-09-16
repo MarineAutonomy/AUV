@@ -36,6 +36,7 @@ SENSOR_IDS = [
     "modem",
     "bar30_ps",
     "sidescan",
+    "frontscan",
 ]
 
 # Match MAV-GUI backend sensorStartCommand (no redundant sros2 — env already loaded).
@@ -57,6 +58,7 @@ START_CMDS: Dict[str, str] = {
     "modem": "ros2 run modem_m64 modem_node --ros-args -r __ns:=/auv -p role:=b -p port:=/dev/modem",
     "bar30_ps": "ros2 run arduino_ps arduino_ps --ros-args -p port:=/dev/arduino_mega",
     "sidescan": "ros2 launch sidescan_ros2 sidescan.launch.py",
+    "frontscan": "ros2 launch frontscan_ros2 frontscan.launch.py",
 }
 
 
@@ -151,6 +153,29 @@ def sidescan_start_cmd(params: Optional[dict] = None) -> str:
         f"-p gain_index:={gain} -p num_results:={num_results}"
     )
 
+
+def frontscan_start_cmd(params: Optional[dict] = None) -> str:
+    """Start FS450 via ros2 run so params work without rebuilding launch share."""
+    p = params or {}
+    speed = _clamp_int(p.get("speed_of_sound_mm"), 1482000, 1482000, 1500000)
+    start_mm = _clamp_int(p.get("start_mm"), 0, 0, 5000)
+    length_mm = _clamp_int(p.get("length_mm"), 5000, 0, 300000)
+    msec = _clamp_int(p.get("msec_per_ping"), 0, 0, 10)
+    pulse = _clamp_float(p.get("pulse_len_percent"), 0.002, 0.002, 0.004)
+    filt = _clamp_float(p.get("filter_duration_percent"), 0.0015, 0.0015, 0.0016)
+    gain = _clamp_int(p.get("gain_index"), -1, -1, 7)
+    num_results = _clamp_int(p.get("num_results"), 600, 200, 1200)
+    return (
+        "ros2 run frontscan_ros2 frontscan_node --ros-args "
+        "-p sensor_number:=450 "
+        "-p ip_address:=192.168.194.90 -p sonar_port:=51200 "
+        f"-p speed_of_sound_mm:={speed} -p start_mm:={start_mm} "
+        f"-p length_mm:={length_mm} -p msec_per_ping:={msec} "
+        f"-p pulse_len_percent:={pulse} -p filter_duration_percent:={filt} "
+        f"-p gain_index:={gain} -p num_results:={num_results}"
+    )
+
+
 STOP_PATTERNS: Dict[str, str] = {
     "dvl": "dvl",
     "sbg": "sbg",
@@ -161,10 +186,11 @@ STOP_PATTERNS: Dict[str, str] = {
     "modem": "modem",
     "bar30_ps": "arduino_ps|ms5837|bar30",
     "sidescan": "sidescan",
+    "frontscan": "frontscan",
 }
 
 # Udev symlink basenames required before On. None = no USB symlink gate
-# (sidescan / dvl require ethernet peers — see sensor_device_ready).
+# (sidescan / frontscan / dvl require ethernet peers — see sensor_device_ready).
 SENSOR_DEV_SYMLINKS: Dict[str, Optional[List[str]]] = {
     "dvl": None,
     "sbg": ["sbg"],
@@ -175,6 +201,7 @@ SENSOR_DEV_SYMLINKS: Dict[str, Optional[List[str]]] = {
     "modem": ["modem"],
     "bar30_ps": ["arduino", "arduino_mega", "arduino_uno", "portenta"],
     "sidescan": None,
+    "frontscan": None,
 }
 
 NOISE_RE = re.compile(
@@ -253,6 +280,8 @@ def sensor_device_ready(sensor_id: str) -> bool:
     if sensor_id == "sidescan":
         # SS450 package needs both static sonar IPs reachable.
         return _ping_host("192.168.194.92") and _ping_host("192.168.194.93")
+    if sensor_id == "frontscan":
+        return _ping_host("192.168.194.90")
     if sensor_id == "dvl":
         return _ping_host("192.168.194.95")
     names = SENSOR_DEV_SYMLINKS.get(sensor_id)
@@ -271,6 +300,8 @@ def start_sensor(sensor_id: str, params: Optional[dict] = None) -> None:
             raise RuntimeError(
                 "sidescan: SS450 inactive — both 192.168.194.92 and 192.168.194.93 must be up"
             )
+        if sensor_id == "frontscan":
+            raise RuntimeError("frontscan: FS450 inactive — 192.168.194.90 must be up")
         if sensor_id == "dvl":
             raise RuntimeError("dvl: DVL inactive — 192.168.194.95 must be up")
         names = SENSOR_DEV_SYMLINKS.get(sensor_id) or []
@@ -284,6 +315,8 @@ def start_sensor(sensor_id: str, params: Optional[dict] = None) -> None:
         cmd = cam_start_cmd(sensor_id, params)
     elif sensor_id == "sidescan":
         cmd = sidescan_start_cmd(params)
+    elif sensor_id == "frontscan":
+        cmd = frontscan_start_cmd(params)
     else:
         cmd = START_CMDS[sensor_id]
 

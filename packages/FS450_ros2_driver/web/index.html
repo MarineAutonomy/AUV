@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Omniscan 450 FS Viewer</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/roslib@1/build/roslib.min.js"></script>
+</head>
+<body>
+  <header>
+    <h1>Omniscan 450 FS Forward Scan</h1>
+    <div id="status-bar">
+      <span id="ros-status" class="status-dot disconnected">ROS: disconnected</span>
+      <span id="ping-info">—</span>
+      <button id="clear-btn" type="button">Clear</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="panel">
+      <h2>Forward range profile (time ↓)</h2>
+      <canvas id="scan-canvas"></canvas>
+      <div class="axis-label">Range ahead →</div>
+    </section>
+    <section class="panel profile-panel">
+      <h2>Latest ping</h2>
+      <canvas id="profile-canvas"></canvas>
+      <div class="axis-label">Nearest ····················· Farthest</div>
+    </section>
+  </main>
+
+  <footer>
+    <p>
+      Topic: <code>/frontscan450/range</code> ·
+      Web: port <span id="web-port">9002</span> ·
+      Rosbridge: <code id="rosbridge-url">—</code>
+    </p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

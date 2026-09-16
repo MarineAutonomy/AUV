@@ -13,6 +13,7 @@ ros2 launch sbg_driver sbg_device_launch.py &
 ros2 run modem_m64 modem_node --ros-args -r __ns:=/auv -p role:=b -p port:=/dev/modem &
 ros2 run arduino_ps arduino_ps --ros-args -p port:=/dev/arduino_mega &
 ros2 launch sidescan_ros2 sidescan.launch.py &
+ros2 launch frontscan_ros2 frontscan.launch.py &
 '
 
 echo "🟢 Sensor launch commands issued!"
