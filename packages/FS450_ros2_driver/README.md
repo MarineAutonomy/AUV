@@ -1,4 +1,4 @@
-# frontscan_ros2
+# FS450 ROS2 DRIVER
 
 ROS2 Humble driver for the Cerulean Omniscan 450 **FS** (forward-scan) sonar.
 
