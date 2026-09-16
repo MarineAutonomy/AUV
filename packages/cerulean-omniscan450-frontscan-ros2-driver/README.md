@@ -65,6 +65,19 @@ See `config/omniscan450_fs_params.yaml` for defaults.
 - The web viewer shows a forward **history plot** (range vs time) plus the latest ping profile.
 - SonarView-style 2D compositing would require stacking pings with vehicle pose (future work).
 
+## Related projects
+
+A companion driver for the Omniscan 450 **Side-scan (SS)** variant is available separately as [`SS450_ros2_driver`](https://github.com/Aatmaj9/SS450_ROS2_DRIVER).
+
+## Author
+
+**Aatmaj Bhayani** — Marine Autonomous Vehicles Lab (MAV-Lab), IIT Madras
+
 ## License
 
-MIT
+MIT — see [LICENSE](https://github.com/Aatmaj9/FS450_ROS2_DRIVER/blob/main/LICENSE) for details.
+
+## Acknowledgments
+
+- [Cerulean Sonar](https://ceruleansonar.com/) for the Omniscan 450 hardware and Ping Protocol
+- [Blue Robotics](https://bluerobotics.com/) for the `ping-python` / `brping` library foundation

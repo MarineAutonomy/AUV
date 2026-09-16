@@ -1,6 +1,6 @@
 services:
   sookshma:
-    image: aatmaj9/timi:2.0
+    image: aatmaj9/timi:4.0
     restart: unless-stopped
     build:
       context: .
@@ -50,7 +50,7 @@ services:
 
   # Run rosbridge persistently (avoid GUI pkill/start churn).
   rosbridge:
-    image: aatmaj9/timi:2.0
+    image: aatmaj9/timi:4.0
     restart: unless-stopped
     container_name: auv_rosbridge
     working_dir: /workspaces/mavlab
@@ -73,7 +73,7 @@ services:
   # MJPEG HTTP streams for MAV GUI (ROS topics unchanged).
   # Example: http://<vehicle-ip>:8080/stream?topic=/front/image_raw/compressed
   web_video_server:
-    image: aatmaj9/timi:2.0
+    image: aatmaj9/timi:4.0
     restart: unless-stopped
     container_name: auv_web_video_server
     working_dir: /workspaces/mavlab
@@ -94,7 +94,7 @@ services:
 
   # Foxglove Studio sidecar (ws://<vehicle-ip>:8765). Does not replace rosbridge for MAV GUI.
   foxglove_bridge:
-    image: aatmaj9/timi:2.0
+    image: aatmaj9/timi:4.0
     restart: unless-stopped
     container_name: auv_foxglove_bridge
     working_dir: /workspaces/mavlab
@@ -116,7 +116,7 @@ services:
   # Vehicle agent for MAV-GUI: sensors, USB/udev, nav/control/missions/rosbag (avoids SSH).
   # Shares host PID/network with `auv` so process probes match the Sensors tab lights.
   vehicle_agent:
-    image: aatmaj9/timi:2.0
+    image: aatmaj9/timi:4.0
     restart: unless-stopped
     container_name: auv_vehicle_agent
     working_dir: /workspaces/mavlab
