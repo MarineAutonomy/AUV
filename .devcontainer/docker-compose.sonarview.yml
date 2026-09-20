@@ -12,6 +12,12 @@ services:
       - ${SONARVIEW_USERDATA:-/home/timi/SonarView}:/userdata
       - /dev:/dev
       - /dev/bus/usb:/dev/bus/usb
+      # Needed so SerialPort.list() gets vendorId (SonarLink skips ports without it).
+      - /run/udev:/run/udev:ro
+      - ./sonarlink-serial-filter.cjs:/opt/mavlab/sonarlink-serial-filter.cjs:ro
+      - ./sonarview-entrypoint.sh:/opt/mavlab/sonarview-entrypoint.sh:ro
     environment:
       - ENABLE_OS3D=false
-  
+      # udev serialNumbers from 99-usb-serial.rules (ping360, ping2)
+      - SONARLINK_SERIAL_ALLOW=DK0GXSZA,DP05HK4F
+    entrypoint: ["/bin/sh", "/opt/mavlab/sonarview-entrypoint.sh"]
