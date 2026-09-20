@@ -11,7 +11,10 @@
       <MaxMessageSize>65500B</MaxMessageSize>
     </General>
     <Discovery>
+      <!-- Keep ParticipantIndex=auto for unicast Peers; raise cap so many
+           sensor nodes can start (default ~9–32 is too low for full stack). -->
       <ParticipantIndex>auto</ParticipantIndex>
+      <MaxAutoParticipantIndex>120</MaxAutoParticipantIndex>
       <Peers>
         <Peer address="127.0.0.1"/>
       </Peers>

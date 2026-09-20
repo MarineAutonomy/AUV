@@ -12,7 +12,10 @@
     </General>
     <Discovery>
       <!-- Help same-host containers (auv + web_video_server) find each other. -->
+      <!-- auto + default MaxAutoParticipantIndex (~9–32) runs out once
+           rosbridge/foxglove/web_video + a few sensors are up — raise the cap. -->
       <ParticipantIndex>auto</ParticipantIndex>
+      <MaxAutoParticipantIndex>120</MaxAutoParticipantIndex>
       <Peers>
         <Peer address="127.0.0.1"/>
       </Peers>
