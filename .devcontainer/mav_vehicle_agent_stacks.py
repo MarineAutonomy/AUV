@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import time
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -122,6 +123,7 @@ MISSION_META: Dict[str, Dict[str, Any]] = {
 
 _bag_active_run: Optional[str] = None
 _rosbag_active_name: Optional[str] = None
+_rosbag_active_pids: List[int] = []
 
 
 def _path(*parts: str) -> str:
@@ -621,58 +623,252 @@ def _next_rosbag_run_name() -> str:
     return f"run{max_n + 1}"
 
 
-def _recording_running() -> bool:
-    return process_running("ros2.*bag.*record") or process_running("ros2 bag record")
+def _record_pid_file(bag_name: str) -> str:
+    # Keep outside the bag folder — writing into the output dir races rosbag2
+    # (non-empty existing dir → recorder exits immediately).
+    return os.path.join(_rosbags_dir(), f".mav_gui_record.{bag_name}.pids")
+
+
+def _find_record_pids(bag_name: str) -> List[int]:
+    """PIDs for ros2 bag record that write this run (not every recorder on the vehicle)."""
+    markers = (f"/rosbags/{bag_name}", f"rosbags/{bag_name}")
+    try:
+        # Do not filter by -u here: vehicle_agent shares host PID ns; keep it simple.
+        out = subprocess.check_output(
+            ["bash", "-lc", "ps -eo pid=,args= 2>/dev/null || true"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        return []
+    pids: List[int] = []
+    for ln in out.splitlines():
+        if NOISE_RE.search(ln):
+            continue
+        low = ln.lower()
+        # Real recorder looks like: python3 .../ros2 bag record ... -o .../rosbags/runN
+        if "bag" not in low or "record" not in low:
+            continue
+        if "play" in low and "record" not in low.split():
+            continue
+        if not any(m in ln for m in markers):
+            continue
+        try:
+            pids.append(int(ln.split(None, 1)[0]))
+        except ValueError:
+            continue
+    return sorted(set(pids))
+
+
+def _write_record_pids(bag_name: str, pids: List[int]) -> None:
+    path = _record_pid_file(bag_name)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(str(p) for p in pids))
+        if pids:
+            f.write("\n")
+
+
+def _read_record_pids(bag_name: str) -> List[int]:
+    path = _record_pid_file(bag_name)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return [int(x) for x in f.read().split() if x.isdigit()]
+    except Exception:
+        return []
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except Exception:
+        return False
+
+
+def _stop_record_run(bag_name: str) -> List[int]:
+    """
+    Force-stop the recorder for this run only.
+    Kill by exact PID only — never pkill -f (that matches the kill shell itself and
+    can suicide before the real ros2 bag record process receives a signal).
+    """
+    for attempt in range(10):
+        pids = _find_record_pids(bag_name)
+        if not pids:
+            return []
+        if attempt == 0:
+            sig = signal.SIGINT
+        elif attempt < 4:
+            sig = signal.SIGTERM
+        else:
+            sig = signal.SIGKILL
+        for pid in pids:
+            try:
+                os.kill(pid, sig)
+            except ProcessLookupError:
+                pass
+            except PermissionError:
+                # Fall back to kill(1) in case of capability quirks.
+                subprocess.run(
+                    ["bash", "-lc", f"kill -{int(sig)} {pid} >/dev/null 2>&1 || true"],
+                    check=False,
+                )
+            except Exception:
+                subprocess.run(
+                    ["bash", "-lc", f"kill -{int(sig)} {pid} >/dev/null 2>&1 || true"],
+                    check=False,
+                )
+        time.sleep(0.45 if attempt < 4 else 0.25)
+    return _find_record_pids(bag_name)
+
+
+def _recording_running_for(bag_name: Optional[str] = None) -> bool:
+    if bag_name:
+        return bool(_find_record_pids(bag_name))
+    return False
+
+
+def _discover_active_gui_recording() -> Tuple[Optional[str], List[int]]:
+    """Find a GUI-started recorder via live cmdlines (not every bag record, never grep)."""
+    root = _rosbags_dir()
+    try:
+        names = sorted(
+            (n for n in os.listdir(root) if re.fullmatch(r"run\d+", n)),
+            key=lambda n: int(n.replace("run", "")),
+            reverse=True,
+        )
+    except FileNotFoundError:
+        return None, []
+    # Prefer newest runs. Only live `ros2 bag record …/rosbags/runN` counts —
+    # ignore stale pid files and never treat `ps|grep` as a recorder.
+    for name in names[:8]:
+        pids = _find_record_pids(name)
+        if pids:
+            return name, pids
+    return None, []
 
 
 def rosbag_status() -> Dict[str, Any]:
-    global _rosbag_active_name
-    running = _recording_running()
-    if not running:
+    global _rosbag_active_name, _rosbag_active_pids
+    name = _rosbag_active_name
+    pids = list(_rosbag_active_pids)
+
+    if name:
+        live = _find_record_pids(name)
+        if live:
+            _rosbag_active_pids = live
+            return {
+                "recording": True,
+                "bagName": name,
+                "pids": live,
+                "via": "vehicle-agent",
+            }
+        # Tracked run finished / was stopped.
         _rosbag_active_name = None
+        _rosbag_active_pids = []
+        return {
+            "recording": False,
+            "bagName": None,
+            "pids": [],
+            "via": "vehicle-agent",
+        }
+
+    # No in-memory track (agent restart) — only recover GUI recorders, never "any ros2 bag record".
+    found_name, found_pids = _discover_active_gui_recording()
+    if found_name:
+        _rosbag_active_name = found_name
+        _rosbag_active_pids = found_pids
+        return {
+            "recording": True,
+            "bagName": found_name,
+            "pids": found_pids,
+            "via": "vehicle-agent",
+        }
+
     return {
-        "recording": running,
-        "bagName": _rosbag_active_name,
+        "recording": False,
+        "bagName": None,
+        "pids": [],
         "via": "vehicle-agent",
     }
 
 
 def rosbag_start(topics: List[str]) -> Dict[str, Any]:
-    global _rosbag_active_name
+    global _rosbag_active_name, _rosbag_active_pids
     if not topics:
         raise ValueError("topics required")
-    if _recording_running() or _rosbag_active_name:
-        raise RuntimeError("rosbag recording already running — stop it first")
+    # Refresh status first so a finished run doesn't block a new start.
+    st = rosbag_status()
+    if st.get("recording"):
+        raise RuntimeError(
+            f"rosbag recording already running ({st.get('bagName')}) — stop it first"
+        )
+
     os.makedirs(_rosbags_dir(), exist_ok=True)
     bag_name = _next_rosbag_run_name()
     topic_list = " ".join(f"{t!r}" for t in topics)
     out = os.path.join(_rosbags_dir(), bag_name)
     start_detached(f"ros2 bag record {topic_list} -o {out!r}")
+
+    pids: List[int] = []
+    for _ in range(12):
+        time.sleep(0.35)
+        pids = _find_record_pids(bag_name)
+        if pids:
+            break
+
     _rosbag_active_name = bag_name
+    _rosbag_active_pids = pids
+    _write_record_pids(bag_name, pids)
     return {
         "code": 0,
         "stdout": f"recording started → rosbags/{bag_name}",
         "bagName": bag_name,
+        "pids": pids,
         "via": "vehicle-agent",
     }
 
 
 def rosbag_stop() -> Dict[str, Any]:
-    global _rosbag_active_name
-    subprocess.run(
-        [
-            "bash",
-            "-lc",
-            'pkill -INT -f "ros2.*bag.*record" >/dev/null 2>&1 || true',
-        ],
-        check=False,
-    )
+    global _rosbag_active_name, _rosbag_active_pids
+    # Re-discover if memory was lost but a GUI recorder is still up.
+    if not _rosbag_active_name:
+        found_name, found_pids = _discover_active_gui_recording()
+        if found_name:
+            _rosbag_active_name = found_name
+            _rosbag_active_pids = found_pids
+
     stopped = _rosbag_active_name
+    pids_before = list(_rosbag_active_pids)
+    if stopped:
+        pids_before = pids_before or _read_record_pids(stopped) or _find_record_pids(stopped)
+
+    still: List[int] = []
+    if stopped:
+        still = _stop_record_run(stopped)
+        try:
+            os.remove(_record_pid_file(stopped))
+        except FileNotFoundError:
+            pass
+        except Exception:
+            pass
+
     _rosbag_active_name = None
+    _rosbag_active_pids = []
     return {
-        "code": 0,
-        "stdout": "recording stopped",
+        "code": 0 if not still else 1,
+        "stdout": (
+            "recording stopped"
+            if not still
+            else f"recording stop incomplete — still running PIDs {still}"
+        ),
         "bagName": stopped,
+        "pids": pids_before,
+        "recording": bool(still),
         "via": "vehicle-agent",
     }
 

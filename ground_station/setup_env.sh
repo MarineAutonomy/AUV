@@ -378,7 +378,7 @@ ensure_docker_image() {
 }
 
 using_docker() {
-  [ -f "$USE_DOCKER_MARKER" ] || [ "${GS_JOY_DOCKER:-0}" = "1" ]
+  [ -f "$USE_DOCKER_MARKER" ] || [ "${GS_USE_DOCKER:-${GS_JOY_DOCKER:-0}}" = "1" ]
 }
 
 pass() { echo "  PASS  $*"; }
@@ -601,6 +601,22 @@ bootstrap_native() {
   print_done
 }
 
+# GUI phased setup: docker daemon only (no pull / no container).
+install_docker_only() {
+  set -euo pipefail
+  echo "=== Install Docker only ==="
+  install_docker
+  echo "Docker install step finished."
+}
+
+# GUI phased setup: resolve + pull/build image (no container start).
+ensure_image_only() {
+  set -euo pipefail
+  echo "=== Ensure ground-station Docker image ==="
+  ensure_docker_image
+  echo "Image step finished ($DOCKER_IMAGE)."
+}
+
 # Sourced → env only. Executed → full setup (or --test only).
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   case "${1:-}" in
@@ -611,11 +627,17 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     --native|native)
       bootstrap_native
       ;;
+    --install-docker)
+      install_docker_only
+      ;;
+    --ensure-image)
+      ensure_image_only
+      ;;
     --docker|docker|"")
       bootstrap_docker
       ;;
     *)
-      echo "Usage: $0 [--docker|--native|--test]" >&2
+      echo "Usage: $0 [--docker|--native|--test|--install-docker|--ensure-image]" >&2
       exit 1
       ;;
   esac

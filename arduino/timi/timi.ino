@@ -226,14 +226,15 @@ void loop() {
       stopAllThrusters();
       delay(500);
     }
-    // 120 s cap only when RF receiver is on and CH5 is in AUTO
-    bool withinAutoWindow = !rfPresent || (millis() - auto_start_time <= AUTO_TIMEOUT);
-    if (withinAutoWindow) {
-      Auto();
+    // Always read serial; thruster packets refresh auto_start_time.
+    // With RF present: if no serial for AUTO_TIMEOUT, failsafe neutral.
+    Auto();
+    bool timedOut = rfPresent && (millis() - auto_start_time > AUTO_TIMEOUT);
+    if (timedOut) {
+      stopAllThrusters();
+    } else {
       lightfl.writeMicroseconds(1900);
       lightbl.writeMicroseconds(1900);
-    } else {
-      stopAllThrusters();
     }
   }
   // ── Manual RF (receiver connected, CH5 = MANUAL) ───────────
