@@ -24,6 +24,7 @@ setup(
     entry_points={
         "console_scripts": [
             "navigation_node = navigation.navigation_node:main",
+            "imu_enu_to_ned = navigation.imu_enu_to_ned:main",
         ],
     },
 )

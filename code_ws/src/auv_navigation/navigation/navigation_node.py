@@ -248,7 +248,7 @@ class NavigationFilterNode(Node):
     def _sensor_topic(self, sensor, apply_prefix):
         if "sensor_topic" not in sensor:
             defaults = {
-                "IMU": "/imu/data",
+                "IMU": "/imu/data/ned",
                 "IMU_SBG": "/sbg/imu_data",
                 "DVL": "/dvl/data",
                 "DVL_DR": "/dvl/position",

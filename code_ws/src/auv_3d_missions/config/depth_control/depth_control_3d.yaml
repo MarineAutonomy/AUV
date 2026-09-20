@@ -1,0 +1,12 @@
+depth_control_mission_3d:
+  ros__parameters:
+    odom_topic: "navigation/odometry"
+    reference_topic: "/guidance/reference_3d"
+    status_topic: "/mission/status"
+
+    # NED z (m), positive down — depth below surface
+    target_depth: 1.0
+    w_gain: 0.70
+    w_max: 0.25
+    lookahead_z: 0.70
+    depth_tolerance: 0.08

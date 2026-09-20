@@ -3,9 +3,9 @@
 #   ros2 run auv_navigation navigation_node --ros-args -p vessel_data_file:=/path/to/vessel_data.yml
 # or set AUV_VESSEL_DATA.
 #
-# Optional: reject measurement updates when Mahalanobis distance^2 exceeds this value
-# (tune per application; leave unset to disable gating).
-# mahalanobis_gate: 25.0
+# Reject measurement updates when Mahalanobis distance^2 exceeds this value
+# (tune per application; comment out or remove to disable gating).
+mahalanobis_gate: 25.0
 #
 # Pool / tank geometry (easy to measure):
 #   pool_depth            — total depth from water surface to bottom (metres)
@@ -29,14 +29,22 @@ agents:
     thrusters: null
     control_surfaces: null
     sensors:
-      # IMU_SBG: uses SBG native NED topics (sbg_ros2_driver with use_enu: false)
-      - sensor_type: IMU_SBG
-        sensor_topic: /sbg/imu_data
-        quat_topic: /sbg/ekf_quat
+      # Standard Imu in NED (run: ros2 run auv_navigation imu_enu_to_ned)
+      # Converts /imu/data (ENU, e.g. SBG use_enu:=true) → /imu/data/ned
+      - sensor_type: IMU
+        sensor_topic: /imu/data/ned
         sensor_location: [0.0, 0.0, -0.3591]
         sensor_orientation: [0.0, 0.0, 0.0]
         default_gyro_variance: 0.001
         default_accel_variance: 0.005
+      # Legacy: SBG native NED topics (sbg_ros2_driver with use_enu: false)
+      # - sensor_type: IMU_SBG
+      #   sensor_topic: /sbg/imu_data
+      #   quat_topic: /sbg/ekf_quat
+      #   sensor_location: [0.0, 0.0, -0.3591]
+      #   sensor_orientation: [0.0, 0.0, 0.0]
+      #   default_gyro_variance: 0.001
+      #   default_accel_variance: 0.005
       - sensor_type: ARDUINO_DEPTH
         sensor_topic: /auv/depth
         sensor_location: [-0.371978, 0.0, -0.360633]

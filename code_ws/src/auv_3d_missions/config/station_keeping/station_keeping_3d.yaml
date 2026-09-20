@@ -1,0 +1,17 @@
+station_keeping_mission_3d:
+  ros__parameters:
+    odom_topic: "navigation/odometry"
+    reference_topic: "/guidance/reference_3d"
+    status_topic: "/mission/status"
+
+    target_x: 0.0
+    target_y: 0.0
+    target_z: 1.0
+
+    kp_xy: 0.35
+    u_max: 0.30
+    v_max: 0.25
+    w_gain: 0.70
+    w_max: 0.25
+    lookahead_z: 0.70
+    pos_tolerance: 0.15

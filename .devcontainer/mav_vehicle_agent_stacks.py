@@ -60,6 +60,7 @@ MISSION_META: Dict[str, Dict[str, Any]] = {
         ],
         "waypoints": ["waypoints_x", "waypoints_y"],
         "dims": 2,
+        "start": "waypoints",
     },
     "2d_los": {
         "pattern": "point_tracking_mission_2d_los",
@@ -76,6 +77,7 @@ MISSION_META: Dict[str, Dict[str, Any]] = {
         ],
         "waypoints": ["waypoints_x", "waypoints_y"],
         "dims": 2,
+        "start": "waypoints",
     },
     "3d_ilos": {
         "pattern": "point_tracking_mission_3d_ilos",
@@ -99,6 +101,7 @@ MISSION_META: Dict[str, Dict[str, Any]] = {
         ],
         "waypoints": ["waypoints_x", "waypoints_y", "waypoints_z"],
         "dims": 3,
+        "start": "waypoints",
     },
     "3d_los": {
         "pattern": "point_tracking_mission_3d_los",
@@ -118,6 +121,44 @@ MISSION_META: Dict[str, Dict[str, Any]] = {
         ],
         "waypoints": ["waypoints_x", "waypoints_y", "waypoints_z"],
         "dims": 3,
+        "start": "waypoints",
+    },
+    "3d_depth": {
+        "pattern": "depth_control_mission_3d",
+        "pkg": "auv_3d_missions",
+        "exe": "depth_control_mission_3d",
+        "yaml": "code_ws/src/auv_3d_missions/config/depth_control/depth_control_3d.yaml",
+        "scalars": [
+            "target_depth",
+            "w_gain",
+            "w_max",
+            "lookahead_z",
+            "depth_tolerance",
+        ],
+        "waypoints": [],
+        "dims": 3,
+        "start": "depth",
+    },
+    "3d_station": {
+        "pattern": "station_keeping_mission_3d",
+        "pkg": "auv_3d_missions",
+        "exe": "station_keeping_mission_3d",
+        "yaml": "code_ws/src/auv_3d_missions/config/station_keeping/station_keeping_3d.yaml",
+        "scalars": [
+            "target_x",
+            "target_y",
+            "target_z",
+            "kp_xy",
+            "u_max",
+            "v_max",
+            "w_gain",
+            "w_max",
+            "lookahead_z",
+            "pos_tolerance",
+        ],
+        "waypoints": [],
+        "dims": 3,
+        "start": "station",
     },
 }
 
@@ -307,7 +348,7 @@ def mission_params_set(kind: str, body: Dict[str, Any]) -> Dict[str, Any]:
     return {"code": 0, "saved": True, "via": "vehicle-agent"}
 
 
-def mission_start(kind: str, points: List[Dict[str, Any]]) -> Dict[str, Any]:
+def mission_start(kind: str, body: Dict[str, Any]) -> Dict[str, Any]:
     meta = MISSION_META[kind]
     if process_running(meta["pattern"]):
         return {
@@ -316,11 +357,42 @@ def mission_start(kind: str, points: List[Dict[str, Any]]) -> Dict[str, Any]:
             "stdout": f"{kind}: already running (skipped start)\n",
             "via": "vehicle-agent",
         }
+    params = _path(meta["yaml"])
+    if meta.get("start") == "depth":
+        depth = body.get("depth", body.get("target_depth"))
+        if depth is None:
+            raise ValueError("depth (target depth in meters) required")
+        d = float(depth)
+        cmd = (
+            f"ros2 run {meta['pkg']} {meta['exe']} --ros-args "
+            f"--params-file {params!r} "
+            f"-p target_depth:={d:.6f}"
+        )
+        start_detached(cmd)
+        return {"code": 0, "via": "vehicle-agent"}
+
+    if meta.get("start") == "station":
+        try:
+            x = float(body.get("x", body.get("target_x")))
+            y = float(body.get("y", body.get("target_y")))
+            z = float(body.get("z", body.get("target_z")))
+        except (TypeError, ValueError) as e:
+            raise ValueError("station keeping requires numeric x, y, z") from e
+        cmd = (
+            f"ros2 run {meta['pkg']} {meta['exe']} --ros-args "
+            f"--params-file {params!r} "
+            f"-p target_x:={x:.6f} -p target_y:={y:.6f} -p target_z:={z:.6f}"
+        )
+        start_detached(cmd)
+        return {"code": 0, "via": "vehicle-agent"}
+
+    points = body.get("points") if isinstance(body, dict) else body
+    if not isinstance(points, list):
+        points = []
     if len(points) < 2:
         raise ValueError("need at least 2 points")
     xs = ", ".join(f"{float(p['x']):.3f}" for p in points)
     ys = ", ".join(f"{float(p['y']):.3f}" for p in points)
-    params = _path(meta["yaml"])
     cmd = (
         f"ros2 run {meta['pkg']} {meta['exe']} --ros-args "
         f"--params-file {params!r} "
@@ -382,6 +454,9 @@ def nav_start(mode: str, bag_name: Optional[str] = None) -> Dict[str, Any]:
             "stdout": "navigation: already running (skipped start)\n",
             "via": "vehicle-agent",
         }
+    # ENU /imu/data → NED /imu/data/ned for the EKF
+    if not process_running("imu_enu_to_ned"):
+        start_detached("ros2 run auv_navigation imu_enu_to_ned")
     if mode == "bag":
         bn = (bag_name or "").strip()
         if not re.fullmatch(r"run\d+", bn or ""):
@@ -404,6 +479,7 @@ def nav_stop() -> Dict[str, Any]:
     global _bag_active_run
     stop_pattern("ros2 bag play")
     stop_pattern("navigation_node")
+    stop_pattern("imu_enu_to_ned")
     _bag_active_run = None
     return {"code": 0, "stopped": True, "via": "vehicle-agent"}
 
@@ -991,7 +1067,7 @@ def handle_get(path: str) -> Optional[Tuple[int, Dict[str, Any]]]:
             return 400, {"code": 1, "stderr": str(e), "via": "vehicle-agent"}
 
     m = re.match(
-        r"^/(missions|missions3d)/(point-tracking|point-tracking-los)/(params|status)$",
+        r"^/(missions|missions3d)/(point-tracking|point-tracking-los|depth-control|station-keeping)/(params|status)$",
         path,
     )
     if m:
@@ -1041,7 +1117,7 @@ def handle_post(path: str, body: Dict[str, Any]) -> Optional[Tuple[int, Dict[str
             return 200, rosbag_play(m_play.group(1))
 
         m = re.match(
-            r"^/(missions|missions3d)/(point-tracking|point-tracking-los)/(params|start|stop)$",
+            r"^/(missions|missions3d)/(point-tracking|point-tracking-los|depth-control|station-keeping)/(params|start|stop)$",
             path,
         )
         if m:
@@ -1051,8 +1127,7 @@ def handle_post(path: str, body: Dict[str, Any]) -> Optional[Tuple[int, Dict[str
                 return 200, mission_stop(kind)
             if action == "params":
                 return 200, mission_params_set(kind, body)
-            points = body.get("points") or []
-            return 200, mission_start(kind, points)
+            return 200, mission_start(kind, body if isinstance(body, dict) else {})
     except ValueError as e:
         return 400, {"code": 1, "stderr": str(e), "via": "vehicle-agent"}
     except FileNotFoundError as e:
@@ -1092,6 +1167,14 @@ def handle_delete(path: str) -> Optional[Tuple[int, Dict[str, Any]]]:
 
 
 def _mission_kind(prefix: str, mode: str) -> str:
+    if mode == "depth-control":
+        if prefix != "missions3d":
+            raise ValueError("depth-control is 3D only")
+        return "3d_depth"
+    if mode == "station-keeping":
+        if prefix != "missions3d":
+            raise ValueError("station-keeping is 3D only")
+        return "3d_station"
     dim = "3d" if prefix == "missions3d" else "2d"
     guidance = "los" if mode.endswith("-los") else "ilos"
     return f"{dim}_{guidance}"

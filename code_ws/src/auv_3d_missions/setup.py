@@ -28,6 +28,8 @@ setup(
         "console_scripts": [
             "point_tracking_mission_3d_ilos = auv_3d_missions.point_tracking.ilos:main",
             "point_tracking_mission_3d_los = auv_3d_missions.point_tracking.los:main",
+            "depth_control_mission_3d = auv_3d_missions.depth_control.hover:main",
+            "station_keeping_mission_3d = auv_3d_missions.station_keeping.hold:main",
         ],
     },
 )
