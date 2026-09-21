@@ -140,7 +140,8 @@
         #     This calibration mode is only designed to be used when roll and pitch motions are less than ± 5°. 
         #     To work correctly, the device should be rotated through at least a full circle.
         # 2 3D Tell the device to start a full 3D magnetic calibration procedure. The 3D magnetic calibration offers the best accuracy
-        mode: 2
+        # AUV: ground yaw-only turns → 2D (cannot tumble in 3D)
+        mode: 1
     
         # 0 LOW_BW Use this parameter in case of strong magnetic noise during calibration. 
         #     Motion during calibration is then limited to slow rotations.

@@ -356,6 +356,192 @@ def stop_sensor(sensor_id: str) -> None:
     )
 
 
+def run_ros_cmd(cmd: str, timeout_s: float = 30.0) -> Tuple[int, str, str]:
+    """Run a one-shot ros2 command with the agent-sourced ROS env."""
+    try:
+        r = subprocess.run(
+            cmd,
+            shell=True,
+            executable="/bin/bash",
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+            env=os.environ.copy(),
+        )
+        return r.returncode, r.stdout or "", r.stderr or ""
+    except subprocess.TimeoutExpired as e:
+        out = (e.stdout or "") if isinstance(e.stdout, str) else ""
+        err = (e.stderr or "") if isinstance(e.stderr, str) else f"timeout after {timeout_s}s"
+        return 1, out, err
+
+
+def _dvl_payload(command: str, parameter_name: str = "", parameter_value: str = "") -> str:
+    n = parameter_name.replace("'", "")
+    v = parameter_value.replace("'", "")
+    return (
+        f"{{command: {command}, parameter_name: '{n}', parameter_value: '{v}'}}"
+    )
+
+
+def dvl_command(kind: str) -> dict:
+    if kind == "calibrate":
+        payload = _dvl_payload("calibrate_gyro")
+    elif kind == "reset":
+        payload = _dvl_payload("reset_dead_reckoning")
+    else:
+        return {"ok": False, "code": 1, "stdout": "", "stderr": f"unknown dvl command: {kind}"}
+    # Escape " for embedding in the ros2 CLI string.
+    escaped = payload.replace('"', '\\"')
+    code, out, err = run_ros_cmd(
+        f'ros2 topic pub --once /dvl/config/command dvl_msgs/msg/ConfigCommand "{escaped}"',
+        timeout_s=20.0,
+    )
+    return {
+        "ok": code == 0,
+        "code": code,
+        "stdout": out,
+        "stderr": err,
+        "via": "vehicle-agent",
+    }
+
+
+def dvl_config(body: dict) -> dict:
+    entries: List[Tuple[str, str]] = []
+    if "speed_of_sound" in body and body["speed_of_sound"] is not None:
+        entries.append(("speed_of_sound", str(int(body["speed_of_sound"]))))
+    if "acoustic_enabled" in body and body["acoustic_enabled"] is not None:
+        entries.append(("acoustic_enabled", "true" if body["acoustic_enabled"] else "false"))
+    if "dark_mode_enabled" in body and body["dark_mode_enabled"] is not None:
+        entries.append(("dark_mode_enabled", "true" if body["dark_mode_enabled"] else "false"))
+    if "mounting_rotation_offset" in body and body["mounting_rotation_offset"] is not None:
+        entries.append(("mounting_rotation_offset", str(body["mounting_rotation_offset"])))
+    if "range_mode" in body and body["range_mode"] is not None:
+        entries.append(("range_mode", str(body["range_mode"]).strip() or "auto"))
+    if not entries:
+        return {
+            "ok": False,
+            "code": 1,
+            "stdout": "",
+            "stderr": "no config fields provided",
+            "applied": [],
+            "via": "vehicle-agent",
+        }
+    outs: List[str] = []
+    errs: List[str] = []
+    applied: List[str] = []
+    for name, value in entries:
+        payload = _dvl_payload("set_config", name, value).replace('"', '\\"')
+        code, out, err = run_ros_cmd(
+            f'ros2 topic pub --once /dvl/config/command dvl_msgs/msg/ConfigCommand "{payload}"',
+            timeout_s=15.0,
+        )
+        outs.append(out)
+        if err:
+            errs.append(err)
+        if code != 0:
+            return {
+                "ok": False,
+                "code": code,
+                "stdout": "\n".join(outs),
+                "stderr": "\n".join(errs) or f"failed on {name}",
+                "applied": applied,
+                "via": "vehicle-agent",
+            }
+        applied.append(name)
+        time.sleep(0.15)
+    return {
+        "ok": True,
+        "code": 0,
+        "stdout": "\n".join(outs),
+        "stderr": "\n".join(errs),
+        "applied": applied,
+        "via": "vehicle-agent",
+    }
+
+
+def _parse_trigger(stdout: str, stderr: str) -> Tuple[bool, str]:
+    text = f"{stdout}\n{stderr}"
+    m_ok = re.search(r"success\s*=\s*(True|False|true|false)", text, re.I)
+    m_msg = re.search(r"message\s*=\s*'([^']*)'", text)
+    success = bool(m_ok and m_ok.group(1).lower() == "true") if m_ok else ("success=True" in text)
+    message = m_msg.group(1) if m_msg else text.strip()[:500]
+    return success, message
+
+
+def sbg_mag_prepare() -> dict:
+    # Same status as Sensors tab (STOP_PATTERNS["sbg"] → "sbg"). Do not auto-stop.
+    if running("sbg"):
+        msg = (
+            "SBG ROS2 driver is On (Sensors tab). "
+            "Turn SBG Off first, then press PREPARE again."
+        )
+        return {
+            "ok": False,
+            "code": 1,
+            "stdout": "",
+            "stderr": msg,
+            "success": False,
+            "message": msg,
+            "via": "vehicle-agent",
+        }
+    stacks.start_detached("ros2 launch sbg_driver sbg_device_mag_calibration_launch.py")
+    time.sleep(2.5)
+    return {
+        "ok": True,
+        "code": 0,
+        "stdout": "",
+        "stderr": "",
+        "success": True,
+        "message": (
+            "Started sbg_device_mag (2D calib, /dev/sbg). Proceed with START CALIBRATION."
+        ),
+        "via": "vehicle-agent",
+    }
+
+
+def sbg_mag_service(which: str) -> dict:
+    if which not in ("mag_calibration", "mag_calibration_save"):
+        return {
+            "ok": False,
+            "code": 1,
+            "stdout": "",
+            "stderr": f"unknown sbg service: {which}",
+            "success": False,
+            "message": f"unknown sbg service: {which}",
+            "via": "vehicle-agent",
+        }
+    code, out, err = run_ros_cmd(
+        f"ros2 service call /sbg/{which} std_srvs/srv/Trigger",
+        timeout_s=40.0,
+    )
+    success, message = _parse_trigger(out, err)
+    ok = code == 0 and success
+    return {
+        "ok": ok,
+        "code": 0 if ok else (code if code != 0 else 1),
+        "stdout": out,
+        "stderr": err,
+        "success": success,
+        "message": message,
+        "via": "vehicle-agent",
+    }
+
+
+def sbg_mag_restore() -> dict:
+    stop_sensor("sbg")
+    time.sleep(1.0)
+    start_sensor("sbg")
+    return {
+        "ok": True,
+        "code": 0,
+        "stdout": "",
+        "stderr": "",
+        "success": True,
+        "message": "Mag node stopped; normal SBG driver started via vehicle agent.",
+        "via": "vehicle-agent",
+    }
+
+
 def activate_all() -> None:
     for sid in SENSOR_IDS:
         if running(sid) or not sensor_device_ready(sid):
@@ -796,7 +982,49 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(raw.decode("utf-8") or "{}")
         except Exception:
             body = {}
-        handled = stacks.handle_post(path, body if isinstance(body, dict) else {})
+        if not isinstance(body, dict):
+            body = {}
+
+        if path == "/dvl/calibrate":
+            result = dvl_command("calibrate")
+            self._json(200 if result.get("ok") else 500, result)
+            return
+        if path == "/dvl/reset":
+            result = dvl_command("reset")
+            self._json(200 if result.get("ok") else 500, result)
+            return
+        if path == "/dvl/config":
+            result = dvl_config(body)
+            self._json(200 if result.get("ok") else 400, result)
+            return
+        if path == "/sbg/mag/prepare":
+            try:
+                result = sbg_mag_prepare()
+                self._json(200, result)
+            except Exception as e:
+                self._json(500, {"ok": False, "code": 1, "success": False, "message": str(e), "stderr": str(e)})
+            return
+        if path == "/sbg/mag/start":
+            result = sbg_mag_service("mag_calibration")
+            self._json(200 if result.get("ok") else 500, result)
+            return
+        if path == "/sbg/mag/finish":
+            result = sbg_mag_service("mag_calibration")
+            self._json(200 if result.get("ok") else 500, result)
+            return
+        if path == "/sbg/mag/save":
+            result = sbg_mag_service("mag_calibration_save")
+            self._json(200 if result.get("ok") else 500, result)
+            return
+        if path == "/sbg/mag/restore":
+            try:
+                result = sbg_mag_restore()
+                self._json(200, result)
+            except Exception as e:
+                self._json(500, {"ok": False, "code": 1, "success": False, "message": str(e), "stderr": str(e)})
+            return
+
+        handled = stacks.handle_post(path, body)
         if handled is not None:
             code, obj = handled
             self._json(code, obj)
