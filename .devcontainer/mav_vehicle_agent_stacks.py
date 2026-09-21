@@ -163,6 +163,32 @@ MISSION_META: Dict[str, Dict[str, Any]] = {
         "dims": 3,
         "start": "station",
     },
+    "3d_dwell": {
+        "pattern": "dwell_mission_3d",
+        "pkg": "auv_3d_missions",
+        "exe": "dwell_mission_3d",
+        "yaml": "code_ws/src/auv_3d_missions/config/dwell/dwell_3d.yaml",
+        "scalars": [
+            "target_x",
+            "target_y",
+            "target_z",
+            "target_pitch_deg",
+            "target_yaw_deg",
+            "initial_hold_s",
+            "cycles",
+            "cycle_hold_s",
+            "roll_hold_s",
+            "kp_xy",
+            "u_max",
+            "v_max",
+            "w_gain",
+            "w_max",
+            "pos_tolerance",
+        ],
+        "waypoints": [],
+        "dims": 3,
+        "start": "dwell",
+    },
 }
 
 _bag_active_run: Optional[str] = None
@@ -394,6 +420,34 @@ def mission_start(kind: str, body: Dict[str, Any]) -> Dict[str, Any]:
         start_detached(cmd)
         return {"code": 0, "via": "vehicle-agent"}
 
+    if meta.get("start") == "dwell":
+        try:
+            x = float(body.get("x", body.get("target_x")))
+            y = float(body.get("y", body.get("target_y")))
+            z = float(body.get("z", body.get("target_z")))
+            pitch = float(body.get("pitch", body.get("target_pitch_deg", 0.0)))
+            yaw = float(body.get("yaw", body.get("target_yaw_deg", 0.0)))
+            initial_hold_s = float(body.get("initial_hold_s", 10.0))
+            cycles = int(body.get("cycles", 1))
+            cycle_hold_s = float(body.get("cycle_hold_s", 10.0))
+            roll_hold_s = float(body.get("roll_hold_s", 4.0))
+        except (TypeError, ValueError) as e:
+            raise ValueError(
+                "dwell requires numeric x, y, z, pitch, yaw, initial_hold_s, cycles, cycle_hold_s, roll_hold_s"
+            ) from e
+        if cycles < 1:
+            raise ValueError("dwell cycles must be >= 1")
+        cmd = (
+            f"ros2 run {meta['pkg']} {meta['exe']} --ros-args "
+            f"--params-file {params!r} "
+            f"-p target_x:={x:.6f} -p target_y:={y:.6f} -p target_z:={z:.6f} "
+            f"-p target_pitch_deg:={pitch:.6f} -p target_yaw_deg:={yaw:.6f} "
+            f"-p initial_hold_s:={initial_hold_s:.6f} -p cycles:={cycles} "
+            f"-p cycle_hold_s:={cycle_hold_s:.6f} -p roll_hold_s:={roll_hold_s:.6f}"
+        )
+        start_detached(cmd)
+        return {"code": 0, "via": "vehicle-agent"}
+
     points = body.get("points") if isinstance(body, dict) else body
     if not isinstance(points, list):
         points = []
@@ -452,19 +506,48 @@ def nav_status() -> Dict[str, Any]:
     }
 
 
+def _ensure_imu_enu_to_ned() -> bool:
+    """ENU /imu/data → NED /imu/data/ned for the EKF. Idempotent."""
+    if process_running("imu_enu_to_ned"):
+        return True
+    # Log failures — silent DEVNULL made missing converters hard to diagnose.
+    log_path = "/tmp/mav_imu_enu_to_ned.log"
+    try:
+        log_f = open(log_path, "ab", buffering=0)
+    except Exception:
+        log_f = subprocess.DEVNULL
+    subprocess.Popen(
+        "ros2 run auv_navigation imu_enu_to_ned",
+        shell=True,
+        executable="/bin/bash",
+        stdout=log_f,
+        stderr=log_f,
+        start_new_session=True,
+        env=os.environ.copy(),
+    )
+    return wait_running("imu_enu_to_ned")
+
+
 def nav_start(mode: str, bag_name: Optional[str] = None) -> Dict[str, Any]:
     global _bag_active_run
+    # Always ensure the converter — even when navigation_node is already up
+    # (skip path used to return before starting it → empty /imu/data/ned).
+    imu_ok = _ensure_imu_enu_to_ned()
     if process_running("navigation_node"):
-        return {
+        out = {
             "code": 0,
             "skipped": True,
             "mode": mode,
             "stdout": "navigation: already running (skipped start)\n",
             "via": "vehicle-agent",
+            "imuEnuToNed": imu_ok,
         }
-    # ENU /imu/data → NED /imu/data/ned for the EKF
-    if not process_running("imu_enu_to_ned"):
-        start_detached("ros2 run auv_navigation imu_enu_to_ned")
+        if not imu_ok:
+            out["stderr"] = (
+                "imu_enu_to_ned did not stay running "
+                "(check /tmp/mav_imu_enu_to_ned.log; rebuild auv_navigation?)"
+            )
+        return out
     if mode == "bag":
         bn = (bag_name or "").strip()
         if not re.fullmatch(r"run\d+", bn or ""):
@@ -480,7 +563,12 @@ def nav_start(mode: str, bag_name: Optional[str] = None) -> Dict[str, Any]:
             "navigation_node did not stay running after start "
             "(check container logs/terminal and vessel config path)."
         )
-    return {"code": 0, "mode": mode, "via": "vehicle-agent"}
+    if not imu_ok:
+        raise RuntimeError(
+            "imu_enu_to_ned did not stay running after start "
+            "(check /tmp/mav_imu_enu_to_ned.log; rebuild auv_navigation?)."
+        )
+    return {"code": 0, "mode": mode, "via": "vehicle-agent", "imuEnuToNed": True}
 
 
 def nav_stop() -> Dict[str, Any]:
@@ -1081,7 +1169,7 @@ def handle_get(path: str) -> Optional[Tuple[int, Dict[str, Any]]]:
             return 400, {"code": 1, "stderr": str(e), "via": "vehicle-agent"}
 
     m = re.match(
-        r"^/(missions|missions3d)/(point-tracking|point-tracking-los|depth-control|station-keeping)/(params|status)$",
+        r"^/(missions|missions3d)/(point-tracking|point-tracking-los|depth-control|station-keeping|dwell)/(params|status)$",
         path,
     )
     if m:
@@ -1131,7 +1219,7 @@ def handle_post(path: str, body: Dict[str, Any]) -> Optional[Tuple[int, Dict[str
             return 200, rosbag_play(m_play.group(1))
 
         m = re.match(
-            r"^/(missions|missions3d)/(point-tracking|point-tracking-los|depth-control|station-keeping)/(params|start|stop)$",
+            r"^/(missions|missions3d)/(point-tracking|point-tracking-los|depth-control|station-keeping|dwell)/(params|start|stop)$",
             path,
         )
         if m:
@@ -1189,6 +1277,10 @@ def _mission_kind(prefix: str, mode: str) -> str:
         if prefix != "missions3d":
             raise ValueError("station-keeping is 3D only")
         return "3d_station"
+    if mode == "dwell":
+        if prefix != "missions3d":
+            raise ValueError("dwell is 3D only")
+        return "3d_dwell"
     dim = "3d" if prefix == "missions3d" else "2d"
     guidance = "los" if mode.endswith("-los") else "ilos"
     return f"{dim}_{guidance}"
