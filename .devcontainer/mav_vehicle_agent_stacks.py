@@ -506,48 +506,19 @@ def nav_status() -> Dict[str, Any]:
     }
 
 
-def _ensure_imu_enu_to_ned() -> bool:
-    """ENU /imu/data → NED /imu/data/ned for the EKF. Idempotent."""
-    if process_running("imu_enu_to_ned"):
-        return True
-    # Log failures — silent DEVNULL made missing converters hard to diagnose.
-    log_path = "/tmp/mav_imu_enu_to_ned.log"
-    try:
-        log_f = open(log_path, "ab", buffering=0)
-    except Exception:
-        log_f = subprocess.DEVNULL
-    subprocess.Popen(
-        "ros2 run auv_navigation imu_enu_to_ned",
-        shell=True,
-        executable="/bin/bash",
-        stdout=log_f,
-        stderr=log_f,
-        start_new_session=True,
-        env=os.environ.copy(),
-    )
-    return wait_running("imu_enu_to_ned")
-
-
 def nav_start(mode: str, bag_name: Optional[str] = None) -> Dict[str, Any]:
     global _bag_active_run
-    # Always ensure the converter — even when navigation_node is already up
-    # (skip path used to return before starting it → empty /imu/data/ned).
-    imu_ok = _ensure_imu_enu_to_ned()
+    # ENU→NED is done in-process by navigation_node (publishes /imu/data/ned).
+    # Do not rely on a separate imu_enu_to_ned process (entry-point often missing
+    # on vehicle installs; process probes were false-positive).
     if process_running("navigation_node"):
-        out = {
+        return {
             "code": 0,
             "skipped": True,
             "mode": mode,
             "stdout": "navigation: already running (skipped start)\n",
             "via": "vehicle-agent",
-            "imuEnuToNed": imu_ok,
         }
-        if not imu_ok:
-            out["stderr"] = (
-                "imu_enu_to_ned did not stay running "
-                "(check /tmp/mav_imu_enu_to_ned.log; rebuild auv_navigation?)"
-            )
-        return out
     if mode == "bag":
         bn = (bag_name or "").strip()
         if not re.fullmatch(r"run\d+", bn or ""):
@@ -563,18 +534,14 @@ def nav_start(mode: str, bag_name: Optional[str] = None) -> Dict[str, Any]:
             "navigation_node did not stay running after start "
             "(check container logs/terminal and vessel config path)."
         )
-    if not imu_ok:
-        raise RuntimeError(
-            "imu_enu_to_ned did not stay running after start "
-            "(check /tmp/mav_imu_enu_to_ned.log; rebuild auv_navigation?)."
-        )
-    return {"code": 0, "mode": mode, "via": "vehicle-agent", "imuEnuToNed": True}
+    return {"code": 0, "mode": mode, "via": "vehicle-agent"}
 
 
 def nav_stop() -> Dict[str, Any]:
     global _bag_active_run
     stop_pattern("ros2 bag play")
     stop_pattern("navigation_node")
+    # Legacy separate converter (if an older agent left one running).
     stop_pattern("imu_enu_to_ned")
     _bag_active_run = None
     return {"code": 0, "stopped": True, "via": "vehicle-agent"}

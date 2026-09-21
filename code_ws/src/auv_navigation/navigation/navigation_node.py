@@ -16,6 +16,7 @@ from sensor_msgs.msg import Imu, JointState, Range
 from std_msgs.msg import Float32, Float64MultiArray
 
 from navigation.ekf_nav import NavEKF
+from navigation.imu_enu_to_ned import imu_enu_to_ned
 from navigation.nav_kinematics import eul_to_rotm, eul_to_quat, quat_to_eul, quat_to_rotm
 from navigation.nav_observations import (
     jacobian_depth,
@@ -158,11 +159,25 @@ class NavigationFilterNode(Node):
             topic = self._sensor_topic(sensor, apply_prefix)
 
             if st == "IMU":
+                # SBG publishes ENU on /imu/data (use_enu:=true). Convert here and
+                # republish NED on sensor_topic (/imu/data/ned) so echo/plots/EKF all work
+                # without a separate imu_enu_to_ned process.
+                ned_topic = topic
+                enu_topic = str(sensor.get("enu_topic", "/imu/data"))
+                if apply_prefix and not enu_topic.startswith("/"):
+                    enu_topic = f"/{self.topic_prefix}/{enu_topic}"
+                elif apply_prefix and enu_topic.startswith("/"):
+                    enu_topic = f"/{self.topic_prefix}{enu_topic}"
 
-                def imu_cb(msg, s=sensor):
-                    self.imu_callback(msg, s)
+                self._imu_ned_pub = self.create_publisher(Imu, ned_topic, 10)
 
-                self.create_subscription(Imu, topic, imu_cb, 10)
+                def imu_enu_cb(msg, s=sensor):
+                    ned = imu_enu_to_ned(msg)
+                    self._imu_ned_pub.publish(ned)
+                    self.imu_callback(ned, s)
+
+                self.create_subscription(Imu, enu_topic, imu_enu_cb, 10)
+                self.get_logger().info(f"IMU ENU→NED: {enu_topic} → {ned_topic} (in-process)")
 
             elif st == "IMU_SBG":
                 quat_topic = sensor.get("quat_topic", "/sbg/ekf_quat")
