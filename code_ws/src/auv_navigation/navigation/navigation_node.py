@@ -107,6 +107,7 @@ class NavigationFilterNode(Node):
         self.n_state = ekf.n_states
 
         self._imu_init_yaw = None
+        self._imu_latest_yaw = None
         self._dvl_dr_R_to_ned = None
         self._dvl_dr_origin = None
         self._dvl_dr_initialized = False
@@ -114,6 +115,7 @@ class NavigationFilterNode(Node):
 
         self._sbg_latest_quat = None
         self._sbg_quat_lock = threading.Lock()
+        self._imu_yaw_lock = threading.Lock()
 
         g = vessel.get("mahalanobis_gate")
         if g is None or g is False or (isinstance(g, str) and g.strip().lower() in ("", "none", "false")):
@@ -288,6 +290,8 @@ class NavigationFilterNode(Node):
     def imu_callback(self, msg, sensor):
         imu_quat = np.array([msg.orientation.w, msg.orientation.x, msg.orientation.y, msg.orientation.z])
         imu_eul = quat_to_eul(imu_quat)
+        with self._imu_yaw_lock:
+            self._imu_latest_yaw = float(imu_eul[2])
         imu_acc = np.array(
             [msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z]
         )
@@ -447,19 +451,23 @@ class NavigationFilterNode(Node):
         with self._ekf_lock:
             if not self._dvl_dr_initialized:
                 dvl_yaw = float(msg.yaw) * (np.pi / 180.0)
+                imu_yaw_now = None
                 with self._sbg_quat_lock:
                     quat_now = self._sbg_latest_quat
-                if quat_now is None:
+                if quat_now is not None:
+                    q = quat_now.quaternion
+                    sbg_quat = np.array([q.w, q.x, q.y, q.z])
+                    imu_yaw_now = float(quat_to_eul(sbg_quat)[2])
+                else:
+                    with self._imu_yaw_lock:
+                        imu_yaw_now = self._imu_latest_yaw
+                if imu_yaw_now is None:
                     self.get_logger().warn(
-                        "DVL DR received before SBG quat; deferring DR init."
+                        "DVL DR received before IMU yaw (/imu/data/ned); deferring DR init."
                     )
                     return
                 self._dvl_dr_origin = y_raw.copy()
-                q = quat_now.quaternion
-                sbg_quat = np.array([q.w, q.x, q.y, q.z])
-                sbg_eul = quat_to_eul(sbg_quat)
-                sbg_yaw_now = float(sbg_eul[2])
-                delta_psi = sbg_yaw_now - dvl_yaw
+                delta_psi = float(imu_yaw_now) - dvl_yaw
                 c, s = np.cos(delta_psi), np.sin(delta_psi)
                 self._dvl_dr_R_to_ned = np.array([
                     [ c, -s,  0.0],
@@ -467,7 +475,7 @@ class NavigationFilterNode(Node):
                     [0.0, 0.0, 1.0],
                 ])
                 self.get_logger().info(
-                    f"DVL DR→NED: SBG yaw={np.degrees(sbg_yaw_now):.1f}°, "
+                    f"DVL DR→NED: IMU yaw={np.degrees(imu_yaw_now):.1f}°, "
                     f"DVL yaw={np.degrees(dvl_yaw):.1f}°, "
                     f"delta={np.degrees(delta_psi):.1f}°"
                 )

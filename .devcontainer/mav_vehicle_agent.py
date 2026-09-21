@@ -178,7 +178,8 @@ def frontscan_start_cmd(params: Optional[dict] = None) -> str:
 
 STOP_PATTERNS: Dict[str, str] = {
     "dvl": "dvl",
-    "sbg": "sbg",
+    # Match driver processes only — bare "sbg" also kills curl/HTTP paths containing /sbg/.
+    "sbg": "sbg_device|sbg_driver|sbg_device_launch|sbg_device_mag|mag_calibration",
     "ping2": "ping1d_node",
     "ping360": "ping360",
     "frontcam": "video_device:=/dev/frontcam",
@@ -242,6 +243,22 @@ def _pgrep_lines(pattern: str) -> List[str]:
     ]
 
 
+def _is_sbg_mag_cmdline(ln: str) -> bool:
+    return "sbg_device_mag" in ln or "mag_calibration" in ln
+
+
+def _is_sbg_normal_cmdline(ln: str) -> bool:
+    """Normal Sensors-tab SBG driver — exclude mag-calib node."""
+    if _is_sbg_mag_cmdline(ln):
+        return False
+    return (
+        "sbg_device_launch" in ln
+        or "sbg_device " in ln
+        or "/sbg_device" in ln
+        or "sbg_driver" in ln
+    )
+
+
 def running(sensor_id: str) -> bool:
     if sensor_id in ("frontcam", "bottomcam"):
         # Only count a live v4l2_camera_node — not a shell wrapper whose cmdline
@@ -254,6 +271,10 @@ def running(sensor_id: str) -> bool:
             if device in ln or ns in ln:
                 return True
         return False
+
+    # Sensors SBG light = normal driver only. Mag-calib must not turn it green.
+    if sensor_id == "sbg":
+        return any(_is_sbg_normal_cmdline(ln) for ln in _pgrep_lines("sbg"))
 
     pat = STOP_PATTERNS.get(sensor_id, sensor_id)
     # bar30 uses alternation — pgrep -f with | needs care; use grep.
@@ -276,6 +297,10 @@ def running(sensor_id: str) -> bool:
     return len(_pgrep_lines(pat)) > 0
 
 
+def sbg_mag_running() -> bool:
+    return any(_is_sbg_mag_cmdline(ln) for ln in _pgrep_lines("sbg"))
+
+
 def sensor_device_ready(sensor_id: str) -> bool:
     if sensor_id == "sidescan":
         # SS450 package needs both static sonar IPs reachable.
@@ -291,6 +316,10 @@ def sensor_device_ready(sensor_id: str) -> bool:
 
 
 def start_sensor(sensor_id: str, params: Optional[dict] = None) -> None:
+    # Mag-calib holds /dev/sbg — stop it before starting the normal Sensors-tab driver.
+    if sensor_id == "sbg" and sbg_mag_running():
+        stop_sensor("sbg")
+        time.sleep(1.0)
     if running(sensor_id):
         # Idempotent: never spawn a second process (cams used to double-start when
         # status briefly showed red / Activate All raced with On).
@@ -350,6 +379,20 @@ def start_sensor(sensor_id: str, params: Optional[dict] = None) -> None:
 
 def stop_sensor(sensor_id: str) -> None:
     pat = STOP_PATTERNS[sensor_id]
+    # Patterns with | need grep -E (same as running() for bar30).
+    if "|" in pat:
+        subprocess.run(
+            [
+                "bash",
+                "-lc",
+                f"pgrep -u mavlab -af . 2>/dev/null | grep -E {pat!r} "
+                f"| grep -vE 'pgrep|grep|bash -lc|bash -ic|bash -c|docker exec|"
+                f"mav_sensor_agent|mav_vehicle_agent|curl |wget ' "
+                f"| awk '{{print $1}}' | xargs -r kill -9 >/dev/null 2>&1 || true",
+            ],
+            check=False,
+        )
+        return
     subprocess.run(
         ["bash", "-lc", f"pkill -u mavlab -9 -f {pat!r} >/dev/null 2>&1 || true"],
         check=False,
@@ -469,7 +512,7 @@ def _parse_trigger(stdout: str, stderr: str) -> Tuple[bool, str]:
 
 
 def sbg_mag_prepare() -> dict:
-    # Same status as Sensors tab (STOP_PATTERNS["sbg"] → "sbg"). Do not auto-stop.
+    # Same status as Sensors tab — normal SBG driver only (mag node excluded).
     if running("sbg"):
         msg = (
             "SBG ROS2 driver is On (Sensors tab). "
@@ -482,21 +525,111 @@ def sbg_mag_prepare() -> dict:
             "stderr": msg,
             "success": False,
             "message": msg,
+            "magRunning": sbg_mag_running(),
             "via": "vehicle-agent",
         }
-    stacks.start_detached("ros2 launch sbg_driver sbg_device_mag_calibration_launch.py")
+    if sbg_mag_running():
+        return {
+            "ok": True,
+            "code": 0,
+            "stdout": "",
+            "stderr": "",
+            "success": True,
+            "message": "Mag-calib node already running. Proceed with START CALIBRATION.",
+            "magRunning": True,
+            "via": "vehicle-agent",
+        }
+    log_path = "/tmp/mav_sbg_mag.log"
+    try:
+        open(log_path, "wb").close()
+        log_f = open(log_path, "ab", buffering=0)
+    except Exception:
+        log_f = subprocess.DEVNULL
+    # CWD = AUV_DIR so mag_calib_*.txt from the driver lands in a known place.
+    subprocess.Popen(
+        "ros2 launch sbg_driver sbg_device_mag_calibration_launch.py",
+        shell=True,
+        executable="/bin/bash",
+        stdout=log_f,
+        stderr=log_f,
+        start_new_session=True,
+        cwd=AUV_DIR,
+        env=os.environ.copy(),
+    )
     time.sleep(2.5)
+    mag_ok = sbg_mag_running()
     return {
-        "ok": True,
-        "code": 0,
+        "ok": mag_ok,
+        "code": 0 if mag_ok else 1,
         "stdout": "",
-        "stderr": "",
-        "success": True,
+        "stderr": "" if mag_ok else "sbg_device_mag did not stay running",
+        "success": mag_ok,
         "message": (
             "Started sbg_device_mag (2D calib, /dev/sbg). Proceed with START CALIBRATION."
+            if mag_ok
+            else "Failed to start sbg_device_mag — check /tmp/mav_sbg_mag.log on the vehicle."
         ),
+        "magRunning": mag_ok,
         "via": "vehicle-agent",
     }
+
+
+def _sbg_mag_log_tail(max_chars: int = 6000) -> str:
+    path = "/tmp/mav_sbg_mag.log"
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    except OSError:
+        return ""
+    if len(text) > max_chars:
+        text = text[-max_chars:]
+    lines = [
+        ln
+        for ln in text.splitlines()
+        if "Mag Calib" in ln
+        or "Quality" in ln
+        or "Confidence" in ln
+        or "=======" in ln
+        or "Used points" in ln
+        or "[Before]" in ln
+        or "[After]" in ln
+        or "[Accuracy]" in ln
+    ]
+    if lines:
+        return "\n".join(lines[-60:])
+    return text.strip()
+
+
+def _latest_mag_calib_report() -> str:
+    """Read newest mag_calib_*.txt written by sbg_device_mag on FINISH."""
+    candidates: List[Tuple[float, str]] = []
+    roots = [AUV_DIR, "/tmp", os.getcwd(), "/workspaces/mavlab"]
+    seen = set()
+    for root in roots:
+        if not root or root in seen:
+            continue
+        seen.add(root)
+        try:
+            for name in os.listdir(root):
+                if not (name.startswith("mag_calib_") and name.endswith(".txt")):
+                    continue
+                path = os.path.join(root, name)
+                try:
+                    candidates.append((os.path.getmtime(path), path))
+                except OSError:
+                    continue
+        except OSError:
+            continue
+    if not candidates:
+        return _sbg_mag_log_tail()
+    candidates.sort()
+    path = candidates[-1][1]
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            body = f.read().strip()
+        return f"{body}\n\n(report file: {path})" if body else _sbg_mag_log_tail()
+    except OSError:
+        return _sbg_mag_log_tail()
 
 
 def sbg_mag_service(which: str) -> dict:
@@ -515,6 +648,13 @@ def sbg_mag_service(which: str) -> dict:
         timeout_s=40.0,
     )
     success, message = _parse_trigger(out, err)
+    report = ""
+    # FINISH computes results and writes mag_calib_*.txt — surface that as the on-tab report.
+    if which == "mag_calibration" and success and "finished" in message.lower():
+        time.sleep(0.4)  # allow file flush
+        report = _latest_mag_calib_report()
+    elif which == "mag_calibration_save" and success:
+        report = _latest_mag_calib_report()
     ok = code == 0 and success
     return {
         "ok": ok,
@@ -523,12 +663,13 @@ def sbg_mag_service(which: str) -> dict:
         "stderr": err,
         "success": success,
         "message": message,
+        "report": report,
         "via": "vehicle-agent",
     }
 
 
 def sbg_mag_restore() -> dict:
-    stop_sensor("sbg")
+    stop_sensor("sbg")  # kills normal + mag (pkill -f sbg)
     time.sleep(1.0)
     start_sensor("sbg")
     return {
@@ -538,6 +679,17 @@ def sbg_mag_restore() -> dict:
         "stderr": "",
         "success": True,
         "message": "Mag node stopped; normal SBG driver started via vehicle agent.",
+        "magRunning": False,
+        "via": "vehicle-agent",
+    }
+
+
+def sbg_mag_status() -> dict:
+    return {
+        "ok": True,
+        "code": 0,
+        "normalSbgRunning": running("sbg"),
+        "magRunning": sbg_mag_running(),
         "via": "vehicle-agent",
     }
 
@@ -891,6 +1043,9 @@ class Handler(BaseHTTPRequestHandler):
                 )
             except Exception as e:
                 self._json(500, {"ok": False, "code": 1, "error": str(e), "devices": []})
+            return
+        if path == "/sbg/mag/status":
+            self._json(200, sbg_mag_status())
             return
         handled = stacks.handle_get(path)
         if handled is not None:

@@ -7,6 +7,10 @@ station_keeping_mission_3d:
     target_x: 0.0
     target_y: 0.0
     target_z: 1.0
+    # Orientation (deg): roll, pitch, yaw — default level, nose North
+    target_roll_deg: 0.0
+    target_pitch_deg: 0.0
+    target_yaw_deg: 0.0
 
     kp_xy: 0.35
     u_max: 0.30

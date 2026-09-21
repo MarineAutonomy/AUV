@@ -148,6 +148,9 @@ MISSION_META: Dict[str, Dict[str, Any]] = {
             "target_x",
             "target_y",
             "target_z",
+            "target_roll_deg",
+            "target_pitch_deg",
+            "target_yaw_deg",
             "kp_xy",
             "u_max",
             "v_max",
@@ -376,12 +379,17 @@ def mission_start(kind: str, body: Dict[str, Any]) -> Dict[str, Any]:
             x = float(body.get("x", body.get("target_x")))
             y = float(body.get("y", body.get("target_y")))
             z = float(body.get("z", body.get("target_z")))
+            roll = float(body.get("roll", body.get("target_roll_deg", 0.0)))
+            pitch = float(body.get("pitch", body.get("target_pitch_deg", 0.0)))
+            yaw = float(body.get("yaw", body.get("target_yaw_deg", 0.0)))
         except (TypeError, ValueError) as e:
-            raise ValueError("station keeping requires numeric x, y, z") from e
+            raise ValueError("station keeping requires numeric x, y, z, roll, pitch, yaw") from e
         cmd = (
             f"ros2 run {meta['pkg']} {meta['exe']} --ros-args "
             f"--params-file {params!r} "
-            f"-p target_x:={x:.6f} -p target_y:={y:.6f} -p target_z:={z:.6f}"
+            f"-p target_x:={x:.6f} -p target_y:={y:.6f} -p target_z:={z:.6f} "
+            f"-p target_roll_deg:={roll:.6f} -p target_pitch_deg:={pitch:.6f} "
+            f"-p target_yaw_deg:={yaw:.6f}"
         )
         start_detached(cmd)
         return {"code": 0, "via": "vehicle-agent"}
@@ -528,7 +536,7 @@ def ekf_params_get() -> Dict[str, Any]:
                 )
         return out
 
-    imu = read_sensor("IMU_SBG")
+    imu = read_sensor("IMU") or read_sensor("IMU_SBG")
     depth = read_sensor("ARDUINO_DEPTH")
     dvl = read_sensor("DVL")
     dvl_dr = read_sensor("DVL_DR")
@@ -619,12 +627,18 @@ def ekf_params_set(updates: Dict[str, Any]) -> Dict[str, Any]:
                 return True
         return False
 
+    def update_imu(key: str, value: Any) -> bool:
+        return update_sensor("IMU", key, value) or update_sensor("IMU_SBG", key, value)
+
+    def update_imu_array(key: str, values: Any) -> bool:
+        return update_sensor_array("IMU", key, values) or update_sensor_array("IMU_SBG", key, values)
+
     ok = True
     ok = update_top("time_step", updates["time_step"]) and ok
     ok = update_top("pool_depth", updates["pool_depth"]) and ok
     ok = update_top("dvl_depth_from_surface", updates["dvl_depth_from_surface"]) and ok
-    ok = update_sensor("IMU_SBG", "default_gyro_variance", updates["imu_default_gyro_variance"]) and ok
-    ok = update_sensor("IMU_SBG", "default_accel_variance", updates["imu_default_accel_variance"]) and ok
+    ok = update_imu("default_gyro_variance", updates["imu_default_gyro_variance"]) and ok
+    ok = update_imu("default_accel_variance", updates["imu_default_accel_variance"]) and ok
     ok = (
         update_sensor("ARDUINO_DEPTH", "default_variance", updates["arduino_depth_default_variance"])
         and ok
@@ -639,8 +653,8 @@ def ekf_params_set(updates: Dict[str, Any]) -> Dict[str, Any]:
     )
     ok = update_sensor("DVL_DR", "dr_drift_rate", updates["dvl_dr_drift_rate"]) and ok
     ok = update_sensor("PING_RANGE", "default_variance", updates["ping_range_default_variance"]) and ok
-    ok = update_sensor_array("IMU_SBG", "sensor_location", updates["imu_sbg_sensor_location"]) and ok
-    ok = update_sensor_array("IMU_SBG", "sensor_orientation", updates["imu_sbg_sensor_orientation"]) and ok
+    ok = update_imu_array("sensor_location", updates["imu_sbg_sensor_location"]) and ok
+    ok = update_imu_array("sensor_orientation", updates["imu_sbg_sensor_orientation"]) and ok
     ok = (
         update_sensor_array(
             "ARDUINO_DEPTH", "sensor_location", updates["arduino_depth_sensor_location"]

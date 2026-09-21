@@ -1,4 +1,4 @@
-"""Station-keeping mission: hold a fixed NED (x, y, z) point."""
+"""Station-keeping mission: hold a fixed NED (x, y, z) + (roll, pitch, yaw) pose."""
 
 from __future__ import annotations
 
@@ -23,12 +23,18 @@ def yaw_from_quat(q: Quaternion) -> float:
     return math.atan2(siny_cosp, cosy_cosp)
 
 
+def wrap_pi(a: float) -> float:
+    return math.atan2(math.sin(a), math.cos(a))
+
+
 class StationKeepingMission3d(Node):
     """
-    Hold a 3D NED setpoint (x, y, z).
+    Hold a 3D NED position (x, y, z) and full orientation
+    (target_roll_deg, target_pitch_deg, target_yaw_deg).
 
-    Body-frame P correction on horizontal error (u_d, v_d), depth loop like
-    depth-control for w_d / theta_d, heading held from first odom sample.
+    Body-frame P correction on horizontal error (u_d, v_d) uses *current* yaw so
+    thrusts stay in the real body frame while attitude tracks the orientation setpoints.
+    Depth is regulated with w_d; orientation setpoints go out as phi_d / theta_d / psi_d.
     Publishes [u_d, v_d, w_d, phi_d, theta_d, psi_d] on /guidance/reference_3d.
     """
 
@@ -42,6 +48,10 @@ class StationKeepingMission3d(Node):
         self.declare_parameter("target_x", 0.0)
         self.declare_parameter("target_y", 0.0)
         self.declare_parameter("target_z", 1.0)
+        # Orientation setpoints (deg, NED / body): roll, pitch, yaw. Defaults level + North.
+        self.declare_parameter("target_roll_deg", 0.0)
+        self.declare_parameter("target_pitch_deg", 0.0)
+        self.declare_parameter("target_yaw_deg", 0.0)
 
         self.declare_parameter("kp_xy", 0.35)
         self.declare_parameter("u_max", 0.30)
@@ -58,7 +68,7 @@ class StationKeepingMission3d(Node):
         self._x: Optional[float] = None
         self._y: Optional[float] = None
         self._z: Optional[float] = None
-        self._psi_hold: Optional[float] = None
+        self._psi: Optional[float] = None
 
         self._ref_pub = self.create_publisher(Float64MultiArray, reference_topic, 10)
         self._status_pub = self.create_publisher(String, status_topic, 10)
@@ -68,16 +78,20 @@ class StationKeepingMission3d(Node):
         tx = float(self.get_parameter("target_x").value)
         ty = float(self.get_parameter("target_y").value)
         tz = float(self.get_parameter("target_z").value)
+        tr = float(self.get_parameter("target_roll_deg").value)
+        tp = float(self.get_parameter("target_pitch_deg").value)
+        tyaw = float(self.get_parameter("target_yaw_deg").value)
         self.get_logger().info(
-            f"station_keeping_mission_3d ready — target=({tx:.3f}, {ty:.3f}, {tz:.3f}) NED"
+            f"station_keeping_mission_3d ready — "
+            f"target=({tx:.3f}, {ty:.3f}, {tz:.3f}) NED "
+            f"rpy=({tr:.1f}, {tp:.1f}, {tyaw:.1f})°"
         )
 
     def _on_odom(self, msg: Odometry) -> None:
         self._x = float(msg.pose.pose.position.x)
         self._y = float(msg.pose.pose.position.y)
         self._z = float(msg.pose.pose.position.z)
-        if self._psi_hold is None:
-            self._psi_hold = yaw_from_quat(msg.pose.pose.orientation)
+        self._psi = yaw_from_quat(msg.pose.pose.orientation)
 
     def _publish_status(self, text: str) -> None:
         m = String()
@@ -92,18 +106,20 @@ class StationKeepingMission3d(Node):
         self._ref_pub.publish(m)
 
     def _on_timer(self) -> None:
-        if self._x is None or self._y is None or self._z is None or self._psi_hold is None:
+        if self._x is None or self._y is None or self._z is None or self._psi is None:
             return
 
         tx = float(self.get_parameter("target_x").value)
         ty = float(self.get_parameter("target_y").value)
         tz = float(self.get_parameter("target_z").value)
+        phi_d = math.radians(float(self.get_parameter("target_roll_deg").value))
+        theta_d = math.radians(float(self.get_parameter("target_pitch_deg").value))
+        psi_d = wrap_pi(math.radians(float(self.get_parameter("target_yaw_deg").value)))
         kp_xy = float(self.get_parameter("kp_xy").value)
         u_max = float(self.get_parameter("u_max").value)
         v_max = float(self.get_parameter("v_max").value)
         w_gain = float(self.get_parameter("w_gain").value)
         w_max = float(self.get_parameter("w_max").value)
-        look_z = float(self.get_parameter("lookahead_z").value)
         tol = float(self.get_parameter("pos_tolerance").value)
 
         # NED position error toward target (north, east); depth error like depth-control.
@@ -111,7 +127,8 @@ class StationKeepingMission3d(Node):
         ey_e = ty - self._y
         ez = self._z - tz
 
-        psi = float(self._psi_hold)
+        # Map horizontal error into the *current* body frame (not the commanded yaw).
+        psi = float(self._psi)
         c, s = math.cos(psi), math.sin(psi)
         # Body: x forward, y starboard
         ex_b = c * ex_n + s * ey_e
@@ -120,22 +137,26 @@ class StationKeepingMission3d(Node):
         u_d = clamp(kp_xy * ex_b, -u_max, u_max)
         v_d = clamp(kp_xy * ey_b, -v_max, v_max)
         w_d = clamp(-w_gain * ez, -w_max, w_max)
-        theta_d = math.atan2(-ez, max(1e-3, look_z))
 
-        self._publish_reference(u_d, v_d, w_d, 0.0, theta_d, psi)
+        self._publish_reference(u_d, v_d, w_d, phi_d, theta_d, psi_d)
 
         err = math.sqrt(ex_n * ex_n + ey_e * ey_e + ez * ez)
-        if err <= tol:
+        yaw_err = abs(wrap_pi(psi_d - psi))
+        if err <= tol and yaw_err <= math.radians(5.0):
             self._publish_status(
                 f"station_keeping_3d: holding "
                 f"pos=({self._x:.2f},{self._y:.2f},{self._z:.2f}) "
-                f"target=({tx:.2f},{ty:.2f},{tz:.2f}) err={err:.3f}m"
+                f"target=({tx:.2f},{ty:.2f},{tz:.2f}) "
+                f"rpy=({math.degrees(phi_d):.1f},{math.degrees(theta_d):.1f},{math.degrees(psi_d):.1f})° "
+                f"err={err:.3f}m"
             )
         else:
             self._publish_status(
                 f"station_keeping_3d: approaching "
                 f"pos=({self._x:.2f},{self._y:.2f},{self._z:.2f}) "
-                f"target=({tx:.2f},{ty:.2f},{tz:.2f}) err={err:.3f}m "
+                f"target=({tx:.2f},{ty:.2f},{tz:.2f}) "
+                f"rpy=({math.degrees(phi_d):.1f},{math.degrees(theta_d):.1f},{math.degrees(psi_d):.1f})° "
+                f"err={err:.3f}m yaw_err={math.degrees(yaw_err):.1f}° "
                 f"u_d={u_d:.2f} v_d={v_d:.2f} w_d={w_d:.2f}"
             )
 
